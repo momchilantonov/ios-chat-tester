@@ -25,7 +25,7 @@ Source: <flow files / ticket / guide section the plan was made from>
   must contain everything needed from the start (including any prelude steps as normal rows).
 - **One action per row** in *User prompt*:
   - plain text -> typed and sent exactly as written (write it as a real customer would, in the profile's language)
-  - `tap <label>` -> tap a quick reply / row / button with that label
+  - `tap <label>` -> tap a quick reply / row / button with that label - always a real tap, never typed
   - `select <label>` -> tick a checkbox or list row (usually followed by a `tap <continue label>` row)
   - `swipe left|right on <what>` -> carousels
   - `wait` -> send nothing, only wait for the next bot message

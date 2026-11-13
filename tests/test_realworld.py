@@ -28,7 +28,7 @@ class RealWorldTest(unittest.TestCase):
         rep = self.t.wait_for_reply()
         self.assertEqual(rep["new_messages"], ["Hi! I can help with cards and payments."])
         self.assertGreaterEqual(rep["waited_s"], 0.9)  # did not return before the real reply
-        self.t.send_message("Cards")
+        self.t.tap(text="Cards")
         self.assertEqual(self.t.wait_for_reply()["new_messages"], ["Which card?"])
 
     def test_silent_bot_with_noise_is_not_a_reply(self):
@@ -78,6 +78,37 @@ class RealWorldTest(unittest.TestCase):
         self.assertTrue(any("Visa" in e and "SELECTED" in e for e in scr["elements"]))
         self.t.tap(text="Продължи")
         self.assertEqual(self.app.received[-1], {"payload": "/продължи"})
+
+    def test_typing_an_option_label_is_refused(self):
+        for as_other in (False, True):
+            self.app.qr_as_other = as_other
+            self.t.open_app(fresh=True)
+            self.t.send_message("Hello")
+            rep = self.t.wait_for_reply()
+            if as_other:  # not exposed as buttons: the labels show up as text
+                self.assertEqual(rep["buttons"], [])
+                self.assertIn("Cards", rep["new_messages"])
+            with self.assertRaises(Exception) as ctx:
+                self.t.send_message("Cards")
+            self.assertIn("tap(element=", str(ctx.exception))
+            self.assertEqual(self.app.received[-1], {"text": "Hello"})   # nothing was typed or sent
+            idx = int(str(ctx.exception).split("tap(element=")[1].split(")")[0])
+            self.t.tap(element=idx)                                      # the suggested element works
+            self.assertEqual(self.app.received[-1], {"payload": "/cards"})
+            expected = ["Which card?", "Debit", "Credit"] if as_other else ["Which card?"]
+            self.assertEqual(self.t.wait_for_reply()["new_messages"], expected)
+
+    def test_typing_an_option_label_when_the_plan_says_so(self):
+        self.t.send_message("Hello")
+        self.t.wait_for_reply()
+        self.t.send_message("Cards", allow_button_text=True)
+        self.assertEqual(self.app.received[-1], {"text": "Cards"})
+
+    def test_repeating_own_message_is_not_refused(self):
+        self.app.silent = True
+        self.t.send_message("здравей")
+        self.t.send_message("здравей")   # the user's own bubble with the same text is on screen
+        self.assertEqual(self.app.received, [{"text": "здравей"}, {"text": "здравей"}])
 
     def test_session_id_from_app_log_then_fetch(self):
         self.s.simctl.app_log = [

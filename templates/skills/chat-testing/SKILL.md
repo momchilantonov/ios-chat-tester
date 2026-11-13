@@ -20,6 +20,9 @@ wait_for_reply()
   `replied: false` + `timed_out` means nothing new arrived - look (`screen`, `screenshot`) and read the log
   before deciding it is a bug. A slow bot is not a missing answer: one more `wait_for_reply(timeout_s=60)`
   is fine.
+- **Options are tapped, never typed.** Some apps don't expose quick replies as buttons; then their labels
+  appear in `new_messages`/`screen()` as text. Tap them anyway: `tap(element=n)` or `tap(text="label")`.
+  `send_message` refuses to type a label that is on screen and tells you which element to tap.
 - Element indexes change with every screen. Use indexes from the **latest** `wait_for_reply`/`screen`.
 - **Rich components**: `wait_for_reply` lists `controls` (list rows, checkboxes, switches, pickers). `SELECTED`
   marks the selected state and `(disabled)` marks buttons that are not usable yet. Typical: tap a row ->

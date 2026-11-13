@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, List, Optional
 from .config import HOME
 from .driver import DriverError, DriverManager, Simulator
 from .plan import STATUSES, fill_results, format_result, parse_plan, public_rows
-from .screen import Element, Screen, exact, new_messages, norm
+from .screen import BUTTON_TYPES, Element, Screen, exact, new_messages, norm
 
 RUNS = HOME / "runs"
 PLANS = HOME / "plans"
@@ -116,6 +116,7 @@ class Tester:
         self._turn_wall = time.time()      # wall clock of the last user action (for the app log)
         self.session_id = ""
         self._executable = ""
+        self._sent: set = set()            # normalised texts the user typed in this conversation
 
     # ---------------------------------------------------------------- basics
     @property
@@ -227,6 +228,7 @@ class Tester:
         if fresh:
             res = self._call("launch", arguments=list(self.cfg["app"].get("launch_arguments") or []))
             self._seen = set()
+            self._sent = set()
             self.session_id = ""
         else:
             res = self._call("activate")
@@ -470,7 +472,7 @@ class Tester:
                                 expected=text, read_back=got)
         raise ToolError("unreachable")
 
-    def send_message(self, text: str) -> Dict[str, Any]:
+    def send_message(self, text: str, allow_button_text: bool = False) -> Dict[str, Any]:
         """Type the message, verify it reads back, tap Send exactly once, confirm it left the composer."""
         if not text or "\n" in text:
             raise ToolError("send_message needs one non-empty line of text")
@@ -478,7 +480,21 @@ class Tester:
         comp = before.composer(self.chat)
         if comp is None:
             raise ToolError("no chat composer (text input) visible", screen=before.listing(40))
+        t = norm(text)
+        if not allow_button_text and t not in self._sent:
+            # Typing the label of an on-screen option sends text instead of the option's payload - a different
+            # code path. Quick replies are often not exposed as buttons, so any short matching label counts.
+            hits = [e for e in before.visible() if e.text and len(e.text) <= 60 and norm(e.text) == t
+                    and e.index != comp.index and not before._inside_any(e, [comp])]
+            if hits:
+                best = sorted(hits, key=lambda e: (e.type not in BUTTON_TYPES, -e.y))[0]
+                self.shown = before
+                raise ToolError("%r is shown on screen (%s). If it is an option/button, TAP it: tap(element=%d) - "
+                                "typing it sends text instead of the option's payload. Only if the test explicitly "
+                                "requires typing this text, call send_message(text, allow_button_text=true)."
+                                % (text, best.describe(), best.index), element=best.describe())
         typed = self._type_into(comp, text)
+        self._sent.add(t)
         scr = self.last_screen or before
         send = scr.send_button(self.chat, typed)
         if send is None:

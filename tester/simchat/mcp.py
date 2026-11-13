@@ -43,7 +43,10 @@ TOOLS: List[Dict[str, Any]] = [
           {"image": _s("boolean", "Attach a screenshot.", default=False)}),
     _tool("send_message", "Send one chat message as the user: types it into the composer, verifies the text "
           "reads back exactly, taps Send exactly once and confirms it left the composer. Never call it twice "
-          "for the same message.", {"text": _s("string", "One line of text, any language.")}, ["text"]),
+          "for the same message. Refuses to type the label of an option shown on screen - tap it instead.",
+          {"text": _s("string", "One line of text, any language."),
+           "allow_button_text": _s("boolean", "Type it even though an option with this label is on screen "
+                                   "(only when the test explicitly requires typing it).", default=False)}, ["text"]),
     _tool("wait_for_reply", "Wait until the bot's new messages have appeared and the screen is quiet. Returns "
           "new_messages, the visible buttons with [index] and rich controls (list rows, checkboxes, switches; "
           "SELECTED marks the selected ones). Call after every send_message or tap that should make the bot answer.",

@@ -36,6 +36,7 @@ class FakeApp:
         self.banner = ""             # noise element, e.g. "test message 2"
         self.start_on_menu = False   # fresh launch shows a menu; "Remote Flow" opens the chat
         self.prefill = ""            # text pre-filled in the composer on launch
+        self.qr_as_other = False     # quick replies exposed as plain views, not buttons (common in chat SDKs)
         self.lock = threading.Lock()
         self.received = []           # what the "bot" received: {"text"} or {"payload"}
         self.commands = []
@@ -126,8 +127,12 @@ class FakeApp:
                 els.append({"type": "text", "label": row[1], "id": "", "value": "", "x": 170, "y": ry + 15, "w": 50, "h": 20})
             elif kind == "btn":
                 enabled = not (row[1] == "Продължи" and not any(sel for _, sel in self.rows))
-                els.append({"type": "button", "label": row[1], "id": "qr." + row[1].lower(), "value": "",
-                            "x": 10, "y": ry, "w": 200, "h": 44, "enabled": enabled})
+                if self.qr_as_other:
+                    els.append({"type": "other", "label": "", "id": "qr." + row[1].lower(), "value": "",
+                                "x": 10, "y": ry, "w": 200, "h": 44, "enabled": enabled, "_qr": True})
+                else:
+                    els.append({"type": "button", "label": row[1], "id": "qr." + row[1].lower(), "value": "",
+                                "x": 10, "y": ry, "w": 200, "h": 44, "enabled": enabled})
                 els.append({"type": "text", "label": row[1], "id": "", "value": "", "x": 20, "y": ry + 10, "w": 150, "h": 24})
             elif kind == "row":
                 label, sel = self.rows[row[1]]
@@ -213,10 +218,10 @@ class FakeApp:
                             if row[0] == e["label"]:
                                 row[1] = not row[1]
                         return {}
-                    if e["type"] == "button" and e["id"].startswith("qr.") and self._hit(e, x, y):
+                    if e["id"].startswith("qr.") and self._hit(e, x, y):
                         if not e["enabled"]:
                             return {}
-                        label = e["label"]
+                        label = next(b for b, _ in self.buttons if "qr." + b.lower() == e["id"])
                         payload = dict(self.buttons).get(label)
                         self._user(label, payload="/" + payload)
                         return {}
