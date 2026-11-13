@@ -1,0 +1,41 @@
+{
+  "_comment": "Copy to config.json (the installer does this) and fill in. Keys starting with _ are ignored.",
+  "app": {
+    "bundle_id": "com.example.ChatDemo",
+    "launch_arguments": []
+  },
+  "simulator": {
+    "_comment": "Empty udid = use the one booted simulator. Pin it when several are booted.",
+    "udid": "",
+    "open_simulator_app": true
+  },
+  "driver": {
+    "port": 8787,
+    "manage": true,
+    "xcodebuild_args": ""
+  },
+  "chat": {
+    "_comment": "Optional hints. Without them the lowest text input is the composer and the button right of it is Send.",
+    "composer_ids": [],
+    "send_ids": [],
+    "send_labels": ["Send"],
+    "typing_ids": [],
+    "typing_labels": []
+  },
+  "pace_ms": 400,
+  "waits": {
+    "reply_timeout_s": 45,
+    "quiet_ms": 2000,
+    "poll_ms": 600,
+    "send_confirm_s": 10
+  },
+  "endpoints": {
+    "_comment": "Local HTTP endpoints the agent may GET for evidence. {placeholders} are filled from fetch(vars=...).",
+    "conversation": "http://127.0.0.1:8000/conversations/{session_id}"
+  },
+  "logs": {
+    "_comment": "Log files the agent may read, e.g. a bot started with: <start command> 2>&1 | tee ~/chat-logs/bot.log",
+    "bot": "~/chat-logs/bot.log"
+  },
+  "error_patterns": ["Traceback", "ERROR", "Exception"]
+}
