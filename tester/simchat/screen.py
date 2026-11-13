@@ -12,6 +12,9 @@ TEXT_TYPES = ("text", "textView", "other", "cell", "link")
 BUTTON_TYPES = ("button", "link")
 CHROME_TYPES = ("navigationBar", "tabBar", "toolbar")  # app chrome, not conversation
 CONTAINER_TYPES = ("scrollView", "collectionView", "table")  # swipe targets such as carousels
+CONTROL_TYPES = ("cell", "switch", "toggle", "checkBox", "radioButton", "slider", "segmentedControl",
+                 "picker", "pickerWheel", "stepper")  # rich components: list rows, checkboxes, ...
+THIN_PT = 8.0  # scroll indicators are a few points wide; real text is never this thin
 
 
 def norm(text: str) -> str:
@@ -33,6 +36,7 @@ class Element:
     value: str
     placeholder: str
     enabled: bool
+    selected: bool
     x: float
     y: float
     w: float
@@ -65,6 +69,8 @@ class Element:
             parts.append("id=%s" % self.id)
         if not self.enabled:
             parts.append("disabled")
+        if self.selected:
+            parts.append("SELECTED")
         cx, cy = self.center
         parts.append("@(%d,%d)" % (cx, cy))
         if self.type in CONTAINER_TYPES:
@@ -73,8 +79,9 @@ class Element:
 
 
 class Screen:
-    def __init__(self, raw: Dict[str, Any]):
+    def __init__(self, raw: Dict[str, Any], ignore: Sequence[str] = ()):
         self.raw = raw
+        self.ignore = [re.compile(p, re.IGNORECASE) for p in ignore if p]
         self.app_state = raw.get("app_state", "unknown")
         size = raw.get("screen") or {}
         self.width = float(size.get("w") or 0)
@@ -87,7 +94,7 @@ class Screen:
                 index=i, type=str(e.get("type", "")), label=str(e.get("label") or ""),
                 id=str(e.get("id") or ""), value=str(e.get("value") or ""),
                 placeholder=str(e.get("placeholder") or ""), enabled=bool(e.get("enabled", True)),
-                x=float(e.get("x", 0)), y=float(e.get("y", 0)), w=float(e.get("w", 0)), h=float(e.get("h", 0))))
+                selected=bool(e.get("selected", False)), x=float(e.get("x", 0)), y=float(e.get("y", 0)), w=float(e.get("w", 0)), h=float(e.get("h", 0))))
 
     # -- geometry -------------------------------------------------------------------------------
     def on_screen(self, e: Element) -> bool:
@@ -98,6 +105,17 @@ class Screen:
 
     def visible(self) -> List[Element]:
         return [e for e in self.elements if self.on_screen(e)]
+
+    def is_noise(self, e: Element) -> bool:
+        """Scroll indicators (thin), and labels matching chat.ignore_labels."""
+        if 0 < min(e.w, e.h) <= THIN_PT:
+            return True
+        return bool(e.text) and any(rx.search(e.text) for rx in self.ignore)
+
+    @staticmethod
+    def _inside_any(e: Element, boxes: Sequence[Element]) -> bool:
+        cx, cy = e.center
+        return any(b.index != e.index and b.x <= cx <= b.x + b.w and b.y <= cy <= b.y + b.h for b in boxes)
 
     # -- chat parts -------------------------------------------------------------------------------
     def composer(self, chat: Dict[str, Any]) -> Optional[Element]:
@@ -130,15 +148,26 @@ class Screen:
 
     def buttons(self, exclude: Iterable[Optional[Element]] = ()) -> List[Element]:
         skip = {x.index for x in exclude if x is not None}
-        return [e for e in self.visible() if e.type in BUTTON_TYPES and e.index not in skip and (e.label or e.id)]
+        return [e for e in self.visible() if e.type in BUTTON_TYPES and e.index not in skip and (e.label or e.id)
+                and not self.is_noise(e)]
+
+    def controls(self, exclude: Iterable[Optional[Element]] = ()) -> List[Element]:
+        """Rich components the user can operate: list rows, checkboxes, switches, pickers, selected items."""
+        skip = {x.index for x in exclude if x is not None}
+        return [e for e in self.visible()
+                if (e.type in CONTROL_TYPES or e.selected) and e.type not in BUTTON_TYPES + CHROME_TYPES
+                and e.index not in skip and (e.text or e.id) and not self.is_noise(e)]
 
     def messages(self, exclude: Iterable[Optional[Element]] = ()) -> List[Element]:
         """Text-bearing elements top to bottom, without inputs, button captions and wrapper duplicates."""
-        skip = {x.index for x in exclude if x is not None}
+        excluded = [x for x in exclude if x is not None]
+        skip = {x.index for x in excluded}
         buttons = [e for e in self.visible() if e.type in BUTTON_TYPES]
         chrome = [e for e in self.visible() if e.type in CHROME_TYPES]
         cands = [e for e in self.visible()
                  if e.type in TEXT_TYPES and e.text.strip() and e.index not in skip
+                 and not self.is_noise(e)
+                 and not self._inside_any(e, excluded)          # e.g. a custom placeholder label in the composer
                  and not any(b.index != e.index and b.contains(e) for b in buttons)
                  and not any(c.contains(e) for c in chrome)]
         out = []
@@ -190,25 +219,32 @@ class Screen:
 
 
 def new_messages(before: Sequence[str], screen: Screen, anchor: str,
-                 exclude: Iterable[Optional[Element]] = ()) -> List[str]:
+                 exclude: Iterable[Optional[Element]] = (), seen: Iterable[str] = ()) -> List[str]:
     """Bot texts that appeared after the user's action.
 
-    With an anchor (the text the user sent, or the tapped quick reply) that is still visible, everything
-    below its lowest occurrence is new. Otherwise: what is on screen now minus what was there before.
+    With an anchor (the text the user sent, or the tapped quick reply) that is still visible, only texts
+    below its lowest occurrence count. Otherwise: what is on screen now minus what was there before.
+    Either way, a text already seen earlier in this conversation is never new: chat lists re-show and keep
+    hidden copies of old bubbles (welcome message, date separators) that would otherwise look new.
     """
+    exclude = list(exclude)
     msgs = screen.messages(exclude)
-    if anchor:
-        a = norm(anchor)
+    old = {norm(t) for t in seen}
+    a = norm(anchor) if anchor else ""
+    if a:
         hits = [m for m in msgs if norm(m.text) == a or (len(a) > 30 and norm(m.text).startswith(a[:30]))]
         if hits:
             low = max(hits, key=lambda m: m.y)
-            return [m.text for m in msgs if m.y > low.y + 1 and norm(m.text) != a]
+            msgs = [m for m in msgs if m.y > low.y + 1]
     left = Counter(norm(t) for t in before)
-    out = []
+    out: List[str] = []
     for m in msgs:
         k = norm(m.text)
+        if k == a or k in old:
+            continue
         if left[k] > 0:
             left[k] -= 1
-        elif not anchor or k != norm(anchor):
+            continue
+        if not out or norm(out[-1]) != k:  # the same bubble reported twice (wrapper + text)
             out.append(m.text)
     return out

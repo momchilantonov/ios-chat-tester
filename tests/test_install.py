@@ -98,7 +98,8 @@ class InstallTest(unittest.TestCase):
             text = (self.home / "skills" / skill / "SKILL.md").read_text()
             self.assertNotIn("{{", text)
         mcp = json.loads((self.home / "mcp-config.json").read_text())
-        self.assertEqual(mcp["mcpServers"]["simchat"]["args"], [str(self.clone / "tester" / "simchat_server.py")])
+        self.assertEqual([str(__import__("pathlib").Path(a).resolve()) for a in mcp["mcpServers"]["simchat"]["args"]],
+                         [str((self.clone / "tester" / "simchat_server.py").resolve())])  # macOS: /var -> /private/var
         vs = json.loads((self.vscode / "mcp.json").read_text())
         self.assertIn("other", vs["servers"])
         self.assertIn("simchat", vs["servers"])

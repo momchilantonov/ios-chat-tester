@@ -7,7 +7,7 @@ description: How to hold a test conversation with a chat assistant in the iOS Si
 
 ## The turn loop
 ```
-open_app(fresh=true)             # clean conversation (or fresh=false to continue the current one)
+open_app(fresh=true)             # clean conversation; taps through app.after_launch (e.g. a demo menu) to the chat
 wait_for_reply()                 # welcome message, if the app shows one
 send_message("...")              # types, reads back, taps Send ONCE, confirms
 wait_for_reply()                 # -> new_messages, buttons "[12] Label"
@@ -21,6 +21,12 @@ wait_for_reply()
   before deciding it is a bug. A slow bot is not a missing answer: one more `wait_for_reply(timeout_s=60)`
   is fine.
 - Element indexes change with every screen. Use indexes from the **latest** `wait_for_reply`/`screen`.
+- **Rich components**: `wait_for_reply` lists `controls` (list rows, checkboxes, switches, pickers). `SELECTED`
+  marks the selected state and `(disabled)` marks buttons that are not usable yet. Typical: tap a row ->
+  `screen()` to confirm it is SELECTED and that "Continue" is enabled -> tap "Continue" -> `wait_for_reply`.
+  Row taps usually don't make the bot answer; only call `wait_for_reply` after the action that sends.
+- A reply identical to an earlier message is not reported as new (the screen keeps old copies). If you
+  expect that, check with `screen()` or the endpoint evidence.
 - Long replies may scroll. If the reply looks cut off, `screen()`; `scroll("up")` to read earlier parts.
 
 ## Swiping, carousels, long press
@@ -45,13 +51,20 @@ wait_for_reply()
 |---|---|---|
 | Endpoint JSON | `fetch(endpoint, vars={...}, path=...)` | what the bot really received/sent: payloads, function calls |
 | Screen | `wait_for_reply`, `screen`, `screenshot` | what the user actually saw (rendered) |
-| Log | `read_log(since="turn")` | errors and internal steps for this turn |
+| Bot log | `read_log(since="turn")` | errors and internal steps for this turn (only if the bot logs to a file) |
+| App log | `app_log(since="turn", grep=...)` | the app/SDK side: requests, errors, often the session id |
 
 - **Button taps:** the screen shows the label; the payload is in the endpoint JSON. When the profile says
   where payloads appear, verify after a tap that the expected payload arrived (not just the label).
 - **Rendered vs sent:** a bot message in the endpoint JSON that never appears on screen is a bug (S2).
 - `check` evidence must be concrete: quote the bot text, name the button and payload, paste the log line.
 - `screenshot` at the key moments (first answer, each decision point, the final state, any error).
+
+## Session id
+`find_session_id()` searches the app log and the bot log (patterns: `session.regex` in config). One candidate
+-> it is set and `fetch(endpoint)` fills `{session_id}` itself. Several -> pick the one belonging to this
+conversation (newest, appears right after your first message) and `set_session_id`. None -> follow the
+profile or ask the user. A fresh `open_app(fresh=true)` clears it - find it again after the first message.
 
 ## Checks to consider each turn
 - The reply is relevant and in the right language; no error/fallback reply (profile lists the error text).
@@ -66,7 +79,10 @@ wait_for_reply()
 | "no booted simulator" / "several simulators" | ask the user to run the app from Xcode / set `simulator.udid` |
 | app not foreground | `open_app()` |
 | system alert (permissions) | `tap(alert_button="Allow")` or the label shown in `alerts` - only if harmless |
-| "typed text did not read back" | nothing was sent; `screen()`; retry once; then `note(kind="bug")` |
+| "typed text did not read back" / "could not clear" | nothing was sent; `screen()`; retry once; then `note(kind="bug")` |
+| `open_app` lands on a menu, not the chat | the user should set `app.after_launch` in config.json (e.g. `["<menu entry>"]`) |
+| noise in `new_messages` (banners, debug labels) | the user can add regexes to `chat.ignore_labels` in config.json |
+| `read_log` has nothing / no log configured | use `app_log`; ask the user to start the bot with `... 2>&1 | tee <log file>` |
 | "Send button not found" | tell the user to set `chat.send_labels`/`send_ids` in `{{TESTER_DIR}}/config.json` (show `screen()`) |
 | send `confirmed: false` | do NOT resend; `screen(image=true)`, then decide |
 | endpoint "cannot reach" | the service is down - tell the user the start command from the profile; BLOCKED |

@@ -13,10 +13,16 @@ Replace every TODO. Delete what does not apply.
 - TODO e.g. `make run-bot 2>&1 | tee ~/chat-logs/bot.log`
 - TODO other services and their ports
 
+## Getting to the chat
+- TODO what a fresh app launch shows and which entries lead to the chat that talks to YOUR bot
+  (also put them in config.json `app.after_launch`)
+- TODO screen noise to ignore (debug banners ...) - also in config.json `chat.ignore_labels`
+
 ## Evidence
 - Conversation/event endpoint: TODO name from config.json `endpoints`, what the JSON contains,
   which fields hold user messages, bot messages, button payloads, function/tool calls.
-- How to find the session/conversation id: TODO (e.g. `read_log(grep="sender")`, or ask the user)
+- How to find the session/conversation id: TODO (`find_session_id()` searches app + bot logs; say which
+  log line shows it, or "ask the user")
 - Error reply the user sees when the backend fails: TODO (quote it)
 
 ## Where flows live in this repo

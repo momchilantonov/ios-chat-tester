@@ -243,7 +243,8 @@ final class CommandHandler {
     // Reported even without a label: things to tap/type into, and scroll containers to swipe (carousels).
     private let interactiveTypes: Set<XCUIElement.ElementType> = [
         .button, .textField, .secureTextField, .textView, .searchField, .link, .cell, .`switch`,
-        .slider, .scrollView, .collectionView, .table,
+        .slider, .scrollView, .collectionView, .table, .toggle, .checkBox, .radioButton, .segmentedControl,
+        .picker, .pickerWheel, .stepper,
     ]
 
     private func typeName(_ t: XCUIElement.ElementType) -> String {
@@ -259,6 +260,13 @@ final class CommandHandler {
         case .link: return "link"
         case .`switch`: return "switch"
         case .slider: return "slider"
+        case .toggle: return "toggle"
+        case .checkBox: return "checkBox"
+        case .radioButton: return "radioButton"
+        case .segmentedControl: return "segmentedControl"
+        case .picker: return "picker"
+        case .pickerWheel: return "pickerWheel"
+        case .stepper: return "stepper"
         case .alert: return "alert"
         case .navigationBar: return "navigationBar"
         case .tabBar: return "tabBar"

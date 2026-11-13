@@ -77,6 +77,7 @@ class Run:
         self.dir = root / ("%s_%s" % (datetime.now().strftime("%Y%m%d-%H%M%S"), _slug(name)))
         self.dir.mkdir(parents=True, exist_ok=True)
         self.started = started
+        self.wall_start = time.time()
         self.checks: List[Dict[str, Any]] = []
         self.notes: List[Dict[str, Any]] = []
         self.transcript: List[Dict[str, Any]] = []
@@ -106,6 +107,10 @@ class Tester:
         self._anchor = ""                  # what the user last sent / tapped
         self._turn_offsets: Dict[str, int] = {}
         self._fetch_n = 0
+        self._seen: set = set()            # every message text observed earlier in this conversation
+        self._turn_wall = time.time()      # wall clock of the last user action (for the app log)
+        self.session_id = ""
+        self._executable = ""
 
     # ---------------------------------------------------------------- basics
     @property
@@ -131,7 +136,7 @@ class Tester:
             self.sleep(pace)
 
     def _snapshot(self) -> Screen:
-        scr = Screen(self._call("snapshot"))
+        scr = Screen(self._call("snapshot"), ignore=self.chat.get("ignore_labels") or [])
         self.last_screen = scr
         return scr
 
@@ -156,6 +161,8 @@ class Tester:
         self._anchor = anchor
         self._before = [m.text for m in before.messages(exclude)]
         self._turn_offsets = self._log_sizes()
+        self._turn_wall = time.time()
+        self._seen.update(self._before)
 
     # ---------------------------------------------------------------- setup / status
     def status(self) -> Dict[str, Any]:
@@ -208,15 +215,38 @@ class Tester:
     def stop_driver(self) -> Dict[str, Any]:
         return self.manager.stop()
 
-    def open_app(self, fresh: bool = False) -> Dict[str, Any]:
+    def open_app(self, fresh: bool = False, navigate: bool = True) -> Dict[str, Any]:
+        """Activate the app, or relaunch it (fresh). After a fresh launch, tap through app.after_launch
+        (e.g. a demo menu) to reach the chat."""
         self._pace()
         if fresh:
             res = self._call("launch", arguments=list(self.cfg["app"].get("launch_arguments") or []))
+            self._seen = set()
+            self.session_id = ""
         else:
             res = self._call("activate")
-        self._journal({"action": "open_app", "fresh": fresh})
+        steps = list(self.cfg["app"].get("after_launch") or []) if (fresh and navigate) else []
+        done = []
+        for step in steps:
+            label = step if isinstance(step, str) else str(step.get("tap", ""))
+            wait_s = 15.0 if isinstance(step, str) else float(step.get("wait_s", 15))
+            deadline = self.clock() + wait_s
+            while True:
+                scr = self._snapshot()
+                hits = scr.find(text=label)
+                if hits:
+                    break
+                if self.clock() >= deadline:
+                    raise ToolError("after_launch: %r did not appear within %ss" % (label, wait_s),
+                                    done=done, buttons=[b.label for b in scr.buttons()])
+                self.sleep(0.5)
+            self._pace()
+            self._call("tap", x=hits[0].center[0], y=hits[0].center[1])
+            done.append(label)
+        self._journal({"action": "open_app", "fresh": fresh, "navigated": done})
         self._before, self._anchor = [], ""
-        return {"app_state": res.get("app_state"), "fresh": fresh}
+        return {"app_state": res.get("app_state"), "fresh": fresh, "navigated": done,
+                "next": "wait_for_reply to read the welcome message (if any)"}
 
     # ---------------------------------------------------------------- looking
     def screen(self, image: bool = False) -> Dict[str, Any]:
@@ -396,25 +426,40 @@ class Tester:
         typed = self._type_into(field, text)
         return {"typed": text, "read_back": typed.value, "field": typed.describe()}
 
+    def _tap_end(self, field: Element) -> None:
+        """Tap near the trailing end of a text field so the cursor lands after the existing text."""
+        x = field.x + field.w - min(12.0, field.w * 0.1)
+        self._call("tap", x=round(x, 1), y=field.center[1])
+
+    def _clear(self, field: Element) -> Element:
+        """Empty a text field and verify it. Raises if it stays non-empty."""
+        cur = field
+        for _ in range(3):
+            scr = self._snapshot()
+            cur = scr.locate(field) or scr.composer(self.chat) or cur
+            if scr.is_empty_input(cur):
+                return cur
+            self._tap_end(cur)
+            self._call("delete", count=len(cur.value) + 5)
+        scr = self._snapshot()
+        cur = scr.locate(field) or scr.composer(self.chat) or cur
+        if not scr.is_empty_input(cur):
+            raise ToolError("could not clear the text field - nothing was sent", value=cur.value)
+        return cur
+
     def _type_into(self, field: Element, text: str) -> Element:
         self._pace()
-        self._call("tap", x=field.center[0], y=field.center[1])
+        self._tap_end(field)
         for attempt in (1, 2):
-            scr = self._snapshot()
-            cur = scr.locate(field) or scr.composer(self.chat)
-            if cur is None:
-                raise ToolError("text field disappeared after tapping it")
-            if not scr.is_empty_input(cur):
-                self._call("delete", count=len(cur.value) + 2)
+            cur = self._clear(field)
             self._pace()
             self._call("type", text=text)
             scr = self._snapshot()
-            cur = scr.locate(field) or scr.composer(self.chat)
-            if cur is not None and exact(cur.value) == exact(text):
+            cur = scr.locate(field) or scr.composer(self.chat) or cur
+            if exact(cur.value) == exact(text):
                 return cur
-            got = cur.value if cur else None
-            if cur is not None:
-                self._call("delete", count=len(cur.value) + 2)
+            got = cur.value
+            self._clear(cur)
             if attempt == 2:
                 raise ToolError("typed text did not read back correctly - nothing was sent (field cleared)",
                                 expected=text, read_back=got)
@@ -469,7 +514,7 @@ class Tester:
             sig = scr.signature()
             if sig != last_sig:
                 last_sig, stable_since = sig, now
-            new = new_messages(self._before, scr, self._anchor, [comp])
+            new = new_messages(self._before, scr, self._anchor, [comp], self._seen)
             typing = scr.typing(self.chat)
             settled = now - stable_since >= quiet
             if (new and settled and not typing) or scr.alerts or now - start >= timeout:
@@ -479,11 +524,16 @@ class Tester:
         send = scr.send_button(self.chat, comp)
         buttons = scr.buttons([comp, send])
         out = {"replied": bool(new), "new_messages": new,
-               "buttons": ["[%d] %s" % (b.index, b.label or b.id) for b in buttons],
+               "buttons": ["[%d] %s%s" % (b.index, b.label or b.id, "" if b.enabled else " (disabled)")
+                           for b in buttons],
                "waited_s": round(self.clock() - start, 1), "typing": typing}
+        controls = scr.controls([comp, send])
+        if controls:
+            out["controls"] = [c.describe() for c in controls]
         if not new:
             out["timed_out"] = True
-            out["hint"] = "no new bot message - check screen()/screenshot() and read_log(since='turn')"
+            out["hint"] = ("no new bot message - check screen()/screenshot(), read_log(since='turn') or "
+                           "app_log(since='turn'). A reply identical to an earlier message is not detected as new.")
         if scr.alerts:
             out["alerts"] = scr.alerts
         self._journal(dict(out, action="wait_for_reply"))
@@ -492,6 +542,7 @@ class Tester:
                                         "buttons": [b.label or b.id for b in buttons]})
         # Next wait compares against this screen unless a new action resets it.
         self._before = [m.text for m in scr.messages([comp])]
+        self._seen.update(self._before)
         self._anchor = ""
         return out
 
@@ -514,7 +565,13 @@ class Tester:
         if not tmpl:
             raise ToolError("unknown endpoint %r" % endpoint, configured=sorted(self.cfg["endpoints"]))
         url = tmpl
-        for key, value in (vars or {}).items():
+        vars = dict(vars or {})
+        if "{session_id}" in tmpl and "session_id" not in vars:
+            if not self.session_id:
+                raise ToolError("this endpoint needs a session id - call find_session_id(), or ask the user and "
+                                "call set_session_id(id)")
+            vars["session_id"] = self.session_id
+        for key, value in vars.items():
             url = url.replace("{%s}" % key, urllib.parse.quote(str(value), safe=""))
         if re.search(r"{\w+}", url):
             raise ToolError("missing vars for %s" % re.findall(r"{(\w+)}", url), template=tmpl)
@@ -584,6 +641,99 @@ class Tester:
         lines = lines[-int(max_lines):]
         return {"log": name, "since": since, "lines": lines, "total_lines": total,
                 "error_lines": errs[-30:], "error_count": len(errs)}
+
+    # ---------------------------------------------------------------- app log / session id
+    def _app_exec(self, udid: str) -> str:
+        if not self._executable:
+            bundle = self.cfg["app"]["bundle_id"]
+            res = self.sim.runner(["xcrun", "simctl", "appinfo", udid, bundle])
+            m = re.search(r'CFBundleExecutable\s*=\s*"?([^";\n]+?)"?;', res.stdout or "")
+            if not m:
+                raise ToolError("cannot find the app's executable name (simctl appinfo) - set app_log.predicate "
+                                "in config.json", bundle_id=bundle)
+            self._executable = m.group(1).strip()
+        return self._executable
+
+    def _app_log_lines(self, start_wall: float) -> List[str]:
+        try:
+            udid = self.sim.udid()
+        except DriverError as exc:
+            raise ToolError(str(exc))
+        predicate = (self.cfg.get("app_log") or {}).get("predicate") or 'process == "%s"' % self._app_exec(udid)
+        start = datetime.fromtimestamp(start_wall).strftime("%Y-%m-%d %H:%M:%S")
+        res = self.sim.runner(["xcrun", "simctl", "spawn", udid, "log", "show", "--style", "compact", "--info",
+                               "--debug", "--start", start, "--predicate", predicate])
+        if res.returncode != 0:
+            raise ToolError("log show failed: %s" % (res.stderr or res.stdout).strip()[:300])
+        return [ln for ln in (res.stdout or "").splitlines()
+                if ln.strip() and not ln.startswith(("Timestamp", "Filtering the log data"))]
+
+    def app_log(self, since: str = "turn", grep: str = "", max_lines: int = 200, minutes: float = 5) -> Dict[str, Any]:
+        """The app's own log from the Simulator (unified log) - no setup needed."""
+        if since == "turn":
+            start = self._turn_wall - 2
+        elif since == "run":
+            start = (self.run.wall_start if self.run else time.time() - 600) - 2
+        else:
+            start = time.time() - float(minutes) * 60
+        lines = self._app_log_lines(start)
+        if grep:
+            rx = re.compile(grep, re.IGNORECASE)
+            lines = [ln for ln in lines if rx.search(ln)]
+        errs = [ln for ln in lines if any(p in ln for p in self.cfg.get("error_patterns") or [])]
+        total = len(lines)
+        return {"since": since, "lines": [ln[:600] for ln in lines[-int(max_lines):]], "total_lines": total,
+                "error_lines": errs[-30:], "error_count": len(errs)}
+
+    def find_session_id(self) -> Dict[str, Any]:
+        """Search the app log and the configured logs for session/conversation ids (newest first)."""
+        patterns = [re.compile(p) for p in (self.cfg.get("session") or {}).get("regex") or []]
+        if not patterns:
+            raise ToolError("no session.regex configured in config.json")
+        sources: List[tuple] = []
+        try:
+            start = (self.run.wall_start if self.run else time.time() - 900) - 5
+            sources.append(("app_log", self._app_log_lines(start)))
+        except ToolError as exc:
+            sources.append(("app_log", []))
+            app_err = str(exc)
+        else:
+            app_err = ""
+        for name in self.cfg["logs"]:
+            try:
+                sources.append((name, self.read_log(name, since="run" if self.run else "tail",
+                                                    max_lines=5000)["lines"]))
+            except ToolError:
+                pass
+        found: Dict[str, Dict[str, Any]] = {}
+        for source, lines in sources:
+            for line in reversed(lines):
+                for rx in patterns:
+                    for m in rx.finditer(line):
+                        value = next((g for g in m.groups() if g), m.group(0))
+                        if value not in found:
+                            found[value] = {"id": value, "source": source, "line": line[:300]}
+        out: Dict[str, Any] = {"candidates": list(found.values())[:10], "current": self.session_id or None}
+        if app_err:
+            out["app_log_error"] = app_err
+        if len(found) == 1 and not self.session_id:
+            self.session_id = next(iter(found))
+            out["current"] = self.session_id
+            out["note"] = "only one candidate - set as the current session id"
+        elif not found:
+            out["hint"] = ("no id found - ask the user how to find it (profile.md), then set_session_id(id). "
+                           "Adjust session.regex in config.json if the logs show it in another format.")
+        else:
+            out["hint"] = "several candidates - pick the one from this conversation and call set_session_id(id)"
+        self._journal({"action": "find_session_id", "candidates": list(found)[:10]})
+        return out
+
+    def set_session_id(self, id: str) -> Dict[str, Any]:  # noqa: A002
+        if not re.match(r"^[\w.:@-]{3,200}$", id or ""):
+            raise ToolError("that does not look like a session id")
+        self.session_id = id
+        self._journal({"action": "set_session_id", "id": id})
+        return {"session_id": id, "next": "fetch(endpoint) now fills {session_id} automatically"}
 
     # ---------------------------------------------------------------- scenarios
     @staticmethod

@@ -35,7 +35,9 @@ TOOLS: List[Dict[str, Any]] = [
           {"wait_s": _s("number", "Seconds to wait for readiness (max 110).", default=50)}),
     _tool("stop_driver", "Stop the UI driver this tool started. Not needed between scenarios."),
     _tool("open_app", "Bring the app under test to the foreground. fresh=true terminates and relaunches it "
-          "(clean conversation).", {"fresh": _s("boolean", "Relaunch the app.", default=False)}),
+          "(clean conversation) and then taps through app.after_launch from config (e.g. a demo menu entry) to "
+          "reach the chat.", {"fresh": _s("boolean", "Relaunch the app.", default=False),
+                              "navigate": _s("boolean", "Run app.after_launch after a fresh launch.", default=True)}),
     _tool("screen", "Read the current screen: chat messages, buttons with [index], composer, Send button, "
           "alerts and all labelled elements. image=true also returns a screenshot.",
           {"image": _s("boolean", "Attach a screenshot.", default=False)}),
@@ -43,7 +45,8 @@ TOOLS: List[Dict[str, Any]] = [
           "reads back exactly, taps Send exactly once and confirms it left the composer. Never call it twice "
           "for the same message.", {"text": _s("string", "One line of text, any language.")}, ["text"]),
     _tool("wait_for_reply", "Wait until the bot's new messages have appeared and the screen is quiet. Returns "
-          "new_messages and the visible buttons with [index]. Call after every send_message or button tap.",
+          "new_messages, the visible buttons with [index] and rich controls (list rows, checkboxes, switches; "
+          "SELECTED marks the selected ones). Call after every send_message or tap that should make the bot answer.",
           {"timeout_s": _s("number", "Max seconds (default from config)."),
            "quiet_ms": _s("number", "How long the screen must be unchanged (default from config).")}),
     _tool("tap", "Tap something: a button/element by [index] from the last screen/wait_for_reply, by visible "
@@ -79,7 +82,8 @@ TOOLS: List[Dict[str, Any]] = [
     _tool("fetch", "GET a configured local endpoint (e.g. the bot's conversation/event API) for evidence. "
           "The response is saved in the run folder.",
           {"endpoint": _s("string", "Endpoint name from config.json."),
-           "vars": _s("object", "Values for {placeholders} in the URL, e.g. {\"session_id\": \"...\"}."),
+           "vars": _s("object", "Values for {placeholders} in the URL. {session_id} is filled automatically "
+                      "after find_session_id/set_session_id."),
            "path": _s("string", "Optional selector, e.g. 'events[-1].text' or 'events.*.event'."),
            "max_chars": _s("integer", "Truncate the returned text.", default=20000)}, ["endpoint"]),
     _tool("read_log", "Read a configured log file: since='turn' (since your last send/tap), 'run' or 'tail'. "
@@ -88,6 +92,16 @@ TOOLS: List[Dict[str, Any]] = [
            "since": _s("string", "turn | run | tail", enum=["turn", "run", "tail"], default="turn"),
            "grep": _s("string", "Case-insensitive regex filter."),
            "max_lines": _s("integer", "Return at most this many (last) lines.", default=200)}),
+    _tool("app_log", "Read the app's own log from the Simulator (no setup needed): since='turn' (since your last "
+          "send/tap), 'run' or 'minutes'. Use grep to filter (regex).",
+          {"since": _s("string", "turn | run | minutes", enum=["turn", "run", "minutes"], default="turn"),
+           "grep": _s("string", "Case-insensitive regex filter."),
+           "minutes": _s("number", "For since='minutes'.", default=5),
+           "max_lines": _s("integer", "Return at most this many (last) lines.", default=200)}),
+    _tool("find_session_id", "Search the app log and the configured logs for the conversation/session id "
+          "(patterns: session.regex in config). Sets it when exactly one candidate is found."),
+    _tool("set_session_id", "Set the conversation/session id to use for fetch() {session_id}.",
+          {"id": _s("string", "The session id.")}, ["id"]),
     _tool("scenarios", "List scenario files, or return one scenario's content by name.",
           {"name": _s("string", "Scenario file name from the list (optional).")}),
     _tool("start_run", "Start a test run: creates runs/<time>_<name>/ and journals every action from now on.",

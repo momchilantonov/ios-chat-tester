@@ -39,6 +39,8 @@ Other ways to run it:
 - Without questions: `python3 install.py --name my-tester --bundle-id <id> --app-repo <dir> --bot-repo <dir>`.
 - Preview only: add `--dry-run`.
 - Into one repo's `.github`/`.vscode` instead of your user folders: add `--into <repo>`.
+- Cloned inside another repo (e.g. the bot repo's `.github/`)? That works. Add the folder to that repo's
+  `.git/info/exclude` so it never shows up in its `git status` or gets committed there.
 - **Update:** `git pull`, then `python3 install.py` again. Files it wrote earlier are updated; files you
   edited by hand are kept unless you add `--force`.
 
@@ -47,8 +49,13 @@ Once, after installing:
 1. **Fill in `tester/profile.md`.** This is what the agent reads first: your product, the customer's
    language, how you start the local stack, where the evidence is, the error reply text and your rules.
 2. **Check `tester/config.json`:**
-   - `endpoints`: the bot's local conversation/event URL.
-   - `logs`: the file your bot logs to. Start the bot with `... 2>&1 | tee <that file>`.
+   - `endpoints`: the bot's local conversation/event URL, e.g. `.../extract/{session_id}`. The agent finds the
+     session id with `find_session_id`.
+   - `logs`: the file your bot logs to. Start the bot with `... 2>&1 | tee <that file>`; the terminal output
+     stays the same. Without it the agent can still read the app's own Simulator log (`app_log`).
+   - `app.after_launch`: the taps from a fresh launch to the chat, if the app opens on a menu, e.g.
+     `["Remote Flow"]`.
+   - `chat.ignore_labels`: regexes for screen noise such as debug banners.
    - `chat.send_labels`: only needed if your Send button isn't found.
 
 Every test session:

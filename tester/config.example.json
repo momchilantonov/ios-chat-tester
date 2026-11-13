@@ -2,7 +2,9 @@
   "_comment": "Copy to config.json (the installer does this) and fill in. Keys starting with _ are ignored.",
   "app": {
     "bundle_id": "com.example.ChatDemo",
-    "launch_arguments": []
+    "launch_arguments": [],
+    "_after_launch": "Taps after a fresh launch to reach the chat, e.g. [\"Open chat\"] or [{\"tap\": \"Open chat\", \"wait_s\": 20}]",
+    "after_launch": []
   },
   "simulator": {
     "_comment": "Empty udid = use the one booted simulator. Pin it when several are booted.",
@@ -20,7 +22,20 @@
     "send_ids": [],
     "send_labels": ["Send"],
     "typing_ids": [],
-    "typing_labels": []
+    "typing_labels": [],
+    "_ignore_labels": "Regexes for labels that are never chat content, e.g. debug banners: [\"^test message \\\\d+$\"]",
+    "ignore_labels": []
+  },
+  "session": {
+    "_comment": "Regexes that find the conversation/session id in the app log and the bot logs (first group = id).",
+    "regex": [
+      "(?i)\\b(?:sender|session|conversation|tracker)[_ -]?id\\b[\"'\\s:=]+[\"']?([A-Za-z0-9][A-Za-z0-9._:@-]{5,})",
+      "/(?:conversations?|sessions?|trackers?|extract)/([A-Za-z0-9][A-Za-z0-9._:@-]{5,})"
+    ]
+  },
+  "app_log": {
+    "_comment": "Empty = the app's own process. Or a log predicate, e.g. subsystem == \"com.example.sdk\"",
+    "predicate": ""
   },
   "pace_ms": 400,
   "waits": {

@@ -9,7 +9,7 @@ from typing import Any, Dict
 HOME = Path(__file__).resolve().parent.parent  # .github/chat-tester
 
 DEFAULTS: Dict[str, Any] = {
-    "app": {"bundle_id": "", "launch_arguments": []},
+    "app": {"bundle_id": "", "launch_arguments": [], "after_launch": []},
     "repos": {},
     "simulator": {"udid": "", "open_simulator_app": True},
     "driver": {"port": 8787, "manage": True, "token": "", "xcodebuild_args": ""},
@@ -19,7 +19,13 @@ DEFAULTS: Dict[str, Any] = {
         "send_labels": ["Send"],
         "typing_ids": [],
         "typing_labels": [],
+        "ignore_labels": [],
     },
+    "session": {"regex": [
+        r"(?i)\b(?:sender|session|conversation|tracker)[_ -]?id\b[\"'\s:=]+[\"']?([A-Za-z0-9][A-Za-z0-9._:@-]{5,})",
+        r"/(?:conversations?|sessions?|trackers?|extract)/([A-Za-z0-9][A-Za-z0-9._:@-]{5,})",
+    ]},
+    "app_log": {"predicate": ""},
     "pace_ms": 400,
     "waits": {"reply_timeout_s": 45, "quiet_ms": 2000, "poll_ms": 600, "send_confirm_s": 10},
     "endpoints": {},
