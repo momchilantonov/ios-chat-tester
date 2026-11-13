@@ -7,7 +7,7 @@
 //   response: {"ok": true, ...}\n   or   {"ok": false, "error": "..."}\n
 //
 // Commands: ping, state, activate, launch, terminate, snapshot, tap, long_press, type, delete, swipe,
-//           alerts, tap_alert, stop.  Coordinates are screen points, the same as the snapshot frames.
+//           hittable, alerts, tap_alert, stop.  Coordinates are screen points, the same as the snapshot frames.
 //
 // Configuration comes from environment variables. xcodebuild forwards TEST_RUNNER_<NAME> to the test
 // process as <NAME>:  SIMCHAT_PORT, SIMCHAT_TOKEN, SIMCHAT_BUNDLE_ID.
@@ -92,7 +92,7 @@ final class CommandHandler {
         var result: [String: Any]
         switch cmd {
         case "ping":
-            result = ["driver": "simchat", "version": 1, "bundle_id": bundleId]
+            result = ["driver": "simchat", "version": 2, "bundle_id": bundleId]
         case "state":
             result = ["app_state": stateName(app.state)]
         case "activate":
@@ -142,6 +142,23 @@ final class CommandHandler {
                 coordinate(a).press(forDuration: 0.05, thenDragTo: coordinate(b))
             }
             result = [:]
+        case "hittable":
+            // Which elements with this type and label (or id) can really be hit. Hidden copies of old buttons
+            // stay in the accessibility tree; a tap on them lands on whatever is drawn underneath.
+            let label = args["label"] as? String ?? ""
+            let ident = args["id"] as? String ?? ""
+            guard !label.isEmpty || !ident.isEmpty else { return fail("hittable needs label or id") }
+            let type = knownTypes.first { typeName($0) == (args["type"] as? String ?? "") } ?? .any
+            let predicate = label.isEmpty ? NSPredicate(format: "identifier == %@", ident)
+                                          : NSPredicate(format: "label == %@", label)
+            var found: [[String: Any]] = []
+            for el in app.descendants(matching: type).matching(predicate).allElementsBoundByIndex.prefix(12)
+            where el.exists {
+                let f = el.frame
+                found.append(["x": Double(f.origin.x), "y": Double(f.origin.y), "w": Double(f.width),
+                              "h": Double(f.height), "hittable": el.isHittable])
+            }
+            result = ["elements": found]
         case "alerts":
             result = ["alerts": alerts()]
         case "tap_alert":
@@ -244,7 +261,14 @@ final class CommandHandler {
     private let interactiveTypes: Set<XCUIElement.ElementType> = [
         .button, .textField, .secureTextField, .textView, .searchField, .link, .cell, .`switch`,
         .slider, .scrollView, .collectionView, .table, .toggle, .checkBox, .radioButton, .segmentedControl,
-        .picker, .pickerWheel, .stepper,
+        .picker, .pickerWheel, .stepper, .webView, .alert, .sheet,
+    ]
+
+    // Types the "hittable" command can be asked about (by the names typeName() gives them).
+    private let knownTypes: [XCUIElement.ElementType] = [
+        .button, .staticText, .link, .cell, .other, .textView, .textField, .image, .`switch`, .toggle,
+        .checkBox, .radioButton, .slider, .segmentedControl, .picker, .pickerWheel, .stepper, .webView,
+        .alert, .sheet,
     ]
 
     private func typeName(_ t: XCUIElement.ElementType) -> String {
@@ -268,6 +292,7 @@ final class CommandHandler {
         case .pickerWheel: return "pickerWheel"
         case .stepper: return "stepper"
         case .alert: return "alert"
+        case .sheet: return "sheet"
         case .navigationBar: return "navigationBar"
         case .tabBar: return "tabBar"
         case .toolbar: return "toolbar"

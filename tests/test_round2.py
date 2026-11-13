@@ -71,7 +71,10 @@ class Round2Test(unittest.TestCase):
         rep = self.t.wait_for_reply()
         self.assertTrue(rep["replied"], rep)
         self.assertEqual(rep["evidence_new_replies"], 1)
-        self.assertIn("repeats an earlier message", rep["note"])
+        # Round 5 (R5-5): below the user's new message, the repeated reply is confirmed by the endpoint and
+        # reported as a new message (it used to be only a note).
+        self.assertEqual(rep["new_messages"], ["Sorry, I did not understand: foo"])
+        self.assertNotIn("note", rep)
 
     def test_without_evidence_identical_reply_is_not_detected(self):
         self.t.send_message("foo")

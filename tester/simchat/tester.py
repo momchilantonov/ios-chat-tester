@@ -14,8 +14,10 @@ from typing import Any, Callable, Dict, List, Optional
 from .config import HOME
 from .driver import DriverError, DriverManager, Simulator
 from .plan import STATUSES, fill_results, format_result, parse_plan, public_rows
-from .screen import (BUTTON_TYPES, Element, Screen, exact, group_options, new_message_elements, norm,
-                     norm_label)
+from collections import Counter
+
+from .screen import (BUTTON_TYPES, CONTROL_TYPES, Element, Screen, anchor_match, exact, group_options, key,
+                     new_message_elements, norm, norm_label)
 
 RUNS = HOME / "runs"
 PLANS = HOME / "plans"
@@ -24,6 +26,23 @@ WRITABLE = ("runs", "plans")
 WRITABLE_EXT = (".md", ".json", ".txt", ".yaml", ".yml")
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
 VERDICTS = ("PASS", "FAIL", "BLOCKED", "INCOMPLETE", "INCONCLUSIVE")
+DRIVER_VERSION = 2     # SimDriverServer.swift "ping" version this code expects (2: "hittable")
+ECHO_WAIT_S = 2.0      # after a tap: how long to look for the user's own echo bubble
+MAX_SCROLL_UP = 3      # swipes to find the start of a reply that is longer than the screen
+_MARKER = re.compile(r"\[[A-Z][A-Z_-]{2,}[^\]]*\]")          # [QUICK-REPLY ...], [SELECT ...]
+_MD_LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
+_URL = re.compile(r"https?://\S+")
+
+
+def _paragraphs(texts: List[str]) -> List[str]:
+    """Evidence texts as lines a chat may draw as separate bubbles, without option markers and link targets."""
+    out: List[str] = []
+    for t in texts:
+        for line in str(t).splitlines():
+            line = _URL.sub("", _MD_LINK.sub(r"\1", _MARKER.sub("", line))).strip()
+            if len(key(line)) >= 3:
+                out.append(line)
+    return out
 
 
 class ToolError(Exception):
@@ -127,12 +146,14 @@ class Tester:
         self._turn_offsets: Dict[str, int] = {}
         self._fetch_n = 0
         self._seen: set = set()            # every message text observed earlier in this conversation
+        self._seen_seq: Dict[str, int] = {}  # ... and the order in which they were first seen
         self._turn_wall = time.time()      # wall clock of the last user action (for the app log)
         self.session_id = ""
         self._executable = ""
         self._sent: set = set()            # normalised texts the user typed in this conversation
         self._last_tap = ""                # label of the last tapped element
         self._alternatives: List[Element] = []
+        self._hidden_skipped = 0
         self._ev_base: Optional[int] = None  # reply-evidence item count at the last user action
         self._ev_base_all: Optional[int] = None
         self._left_app: Optional[Dict[str, Any]] = None  # set when the app was found in the background
@@ -259,7 +280,35 @@ class Tester:
         self._before = [m.text for m in before.messages(exclude)]
         self._turn_offsets = self._log_sizes()
         self._turn_wall = time.time()
-        self._seen.update(norm(t) for t in self._before)
+        self._seen_add(self._before)
+
+    def _seen_add(self, texts: List[str]) -> None:
+        for t in texts:
+            k = norm(t)
+            self._seen.add(k)
+            self._seen_seq.setdefault(k, len(self._seen_seq))
+
+    def _hidden_copies(self, scr: Screen, msgs: List[Element], exclude: List[Optional[Element]]) -> set:
+        """Trailing bubbles that repeat an older text below newer ones, with nothing tappable below them: hidden
+        copies of old bubbles that chat lists keep in the accessibility tree."""
+        floor = min((x.y for x in exclude if x is not None), default=scr.height or 1e9)
+        tappable = [e.y for e in scr.buttons(exclude) + scr.controls(exclude) + scr.actions(exclude)
+                    if e.center[1] < floor]
+        hidden = set()
+        for i in range(len(msgs) - 1, 0, -1):
+            m = msgs[i]
+            seq = self._seen_seq.get(norm(m.text))
+            above = [self._seen_seq.get(norm(x.text), 10 ** 9) for x in msgs[:i]]
+            if seq is None or seq >= max(above) or any(y > m.y for y in tappable):
+                break
+            hidden.add(m.index)
+        return hidden
+
+    def _in_app_browser(self, scr: Optional[Screen]) -> bool:
+        return scr is not None and scr.app_state == "foreground" and scr.composer(self.chat) is None and scr.web_view()
+
+    IN_APP_BROWSER_HINT = ("an in-app web page opened over the chat (a link). If the row expects a link, that is "
+                           "success. Close it: screen(), then tap its Close/Done button, then continue.")
 
     # ---------------------------------------------------------------- setup / status
     def status(self) -> Dict[str, Any]:
@@ -273,6 +322,10 @@ class Tester:
         if out["driver"]["phase"] == "ready":
             try:
                 out["app_state"] = self.manager.client().call("state").get("app_state")
+                version = int(self.manager.client().call("ping").get("version") or 1)
+                if version < DRIVER_VERSION:
+                    out["driver"]["outdated"] = ("the running driver is v%d, this tool needs v%d: stop_driver, then "
+                                                 "start_driver (it rebuilds)" % (version, DRIVER_VERSION))
             except DriverError as exc:
                 out["app_state"] = "unknown (%s)" % exc
         out["endpoints"] = {name: self._port_open(url) for name, url in self.cfg["endpoints"].items()}
@@ -321,6 +374,7 @@ class Tester:
             self._conv_offsets = self._log_sizes()
             res = self._call("launch", arguments=list(self.cfg["app"].get("launch_arguments") or []))
             self._seen = set()
+            self._seen_seq = {}
             self._sent = set()
             self._last_tap = ""
             self.session_id = ""
@@ -355,15 +409,27 @@ class Tester:
         self.shown = scr
         comp = scr.composer(self.chat)
         send = scr.send_button(self.chat, comp)
+        msgs = scr.messages([comp])
+        hidden = self._hidden_copies(scr, msgs, [comp])
         out: Dict[str, Any] = {
             "app_state": scr.app_state, "keyboard": scr.keyboard, "alerts": scr.alerts,
             "elements": scr.listing(),
-            "messages": [m.text for m in scr.messages([comp])],
+            "messages": [m.text for m in msgs if m.index not in hidden],
             "buttons": ["[%d] %s" % (b.index, b.label or b.id) for b in scr.buttons([comp, send])],
             "composer": comp.describe() if comp else None,
             "send_button": send.describe() if send else None,
             "typing": scr.typing(self.chat),
         }
+        if hidden:
+            out["hidden_copies"] = [m.describe() for m in msgs if m.index in hidden]
+        acts = scr.actions([comp])
+        if acts:
+            out["actions"] = ["[%d] %s" % (a.index, a.text) for a in acts]
+        if scr.app_alerts():
+            out["app_alerts"] = scr.app_alerts()
+        if self._in_app_browser(scr):
+            out["in_app_browser"] = True
+            out["hint"] = self.IN_APP_BROWSER_HINT
         if image:
             try:
                 out["_image"] = self._screenshot_file("screen")
@@ -420,21 +486,31 @@ class Tester:
             if self.run and target.type in ("button", "link"):
                 self.run.transcript.append({"from": "user", "tap": target.label or target.id})
         out: Dict[str, Any] = {"tapped": what, "next": "call wait_for_reply if this should make the bot answer"}
-        # A link/deeplink may switch to another app with a delay: watch the state for a moment.
-        deadline = self.clock() + float(self.cfg["waits"].get("app_switch_s", 2.0))
-        while self.clock() < deadline:
-            self.sleep(0.25)
-            if self._call("state").get("app_state") not in ("foreground", "unknown"):
-                self.sleep(0.5)
-                self._ensure_app()
-                break
+        if self._hidden_skipped:
+            out["skipped_hidden_copies"] = self._hidden_skipped
+        want_echo = target is not None and bool(target.text) and target.type not in CONTROL_TYPES
+        after, echo = self._watch_after_tap(before, want_echo)
         if self._left_app:
             entry["left_app"] = True
             self._journal(entry)
             return self._take_left_app({"tapped": what})
+        if self._in_app_browser(after):
+            entry["left_app"] = "in_app_browser"
+            self._journal(entry)
+            return {"tapped": what, "left_app": "in_app_browser", "hint": self.IN_APP_BROWSER_HINT}
+        if want_echo and echo is not None and not self._echo_matches(echo, target.text):
+            out["tap_mismatch"] = {"asked": target.text, "sent": echo}
+            out["warning"] = ("the app shows %r as your message, not %r: the tap went through to another element "
+                              "(e.g. a hidden copy of an old button over another row). This step is INVALID - not "
+                              "a bot result. Call screen() and tap the right [index]; if it repeats, record the row "
+                              "as blocked with this mismatch." % (echo, target.text))
+            entry["tap_mismatch"] = out["tap_mismatch"]
+            self._anchor = echo
+            self._last_tap = echo
         if self._alternatives:
             # The same label is on screen more than once: make sure the tap did something.
-            after = self._snapshot()
+            if after is None:
+                after = self._snapshot()
             if after.signature() == before.signature():
                 out = {"tapped": what, "no_visible_effect": True,
                        "warning": "nothing changed on screen. %r is shown %d times - this copy may be an old or "
@@ -444,6 +520,80 @@ class Tester:
                 entry["no_visible_effect"] = True
         self._journal(entry)
         return self._take_left_app(out)
+
+    def _watch_after_tap(self, before: Screen, want_echo: bool) -> tuple:
+        """After a tap: watch for a link/deeplink switching to another app (it can take seconds), and for the
+        user's own echo bubble. Stops as soon as the chat changed (and the echo is there, or ECHO_WAIT_S passed);
+        watches up to waits.app_switch_s when nothing changes in the app."""
+        t0 = self.clock()
+        watch_until = t0 + float(self.cfg["waits"].get("app_switch_s", 6.0))
+        echo_until = t0 + ECHO_WAIT_S
+        after: Optional[Screen] = None
+        echo: Optional[str] = None
+        changed, n = False, 0
+        while True:
+            now = self.clock()
+            if changed and (not want_echo or echo is not None or now >= echo_until):
+                break
+            if not changed and now >= watch_until:
+                break
+            self.sleep(0.25)
+            if self._call("state").get("app_state") not in ("foreground", "unknown"):
+                self.sleep(0.5)
+                self._ensure_app()
+                return None, None
+            n += 1
+            if n % 2:
+                continue  # a snapshot is slower than a state query: every other poll
+            after = Screen(self._call("snapshot"), ignore=self.chat.get("ignore_labels") or [])
+            self.last_screen = after
+            if after.signature() != before.signature():
+                changed = True
+            if want_echo and echo is None:
+                echo = self._echo(before, after)
+        return after, echo
+
+    def _echo(self, before: Screen, after: Screen) -> Optional[str]:
+        """The newest user-side bubble that was not on screen before the tap."""
+        if after.app_state != "foreground":
+            return None
+        old = Counter(norm(m.text) for m in before.messages([before.composer(self.chat)]) if before.user_side(m))
+        new = []
+        for m in after.messages([after.composer(self.chat)]):
+            if not after.user_side(m):
+                continue
+            k = norm(m.text)
+            if old[k] > 0:
+                old[k] -= 1
+                continue
+            new.append(m)
+        return max(new, key=lambda m: m.y).text if new else None
+
+    @staticmethod
+    def _echo_matches(echo: str, asked: str) -> bool:
+        a, e = norm_label(asked), norm_label(echo).rstrip("…")
+        return (a == e or key(a) == key(e) or (len(e) >= 10 and a.startswith(e))
+                or (len(a) > 30 and e.startswith(a[:30])))
+
+    def _hittable(self, els: List[Element]) -> Dict[int, bool]:
+        """Ask the driver which of these elements can really be hit (XCUIElement.isHittable). Hidden copies of
+        old buttons stay in the accessibility tree; a tap on them lands on whatever is drawn underneath.
+        Empty when the driver is older than this command."""
+        res: Dict[int, bool] = {}
+        groups: Dict[tuple, List[Element]] = {}
+        for e in els:
+            groups.setdefault((e.type, e.label, "" if e.label else e.id), []).append(e)
+        for (typ, label, ident), members in groups.items():
+            try:
+                frames = self._driver().call("hittable", type=typ, label=label, id=ident).get("elements") or []
+            except (DriverError, ToolError):
+                return {}
+            for e in members:
+                f = next((f for f in frames if all(abs(float(f.get(k, -99)) - v) <= 2
+                                                   for k, v in (("x", e.x), ("y", e.y), ("w", e.w), ("h", e.h)))), None)
+                if f is not None:
+                    res[e.index] = bool(f.get("hittable", True))
+        return res
 
     def _rank_fresh(self, scr: Screen, hits: List[Element]) -> List[Element]:
         """Several copies of a label (old menus keep reporting positions after scrolling away): prefer buttons,
@@ -457,6 +607,7 @@ class Tester:
     def _target(self, before: Screen, element: Optional[int], text: str, ident: str) -> Optional[Element]:
         """Resolve element [index] (from the listing the agent saw), visible text or accessibility id."""
         self._alternatives = []
+        self._hidden_skipped = 0
         target: Optional[Element] = None
         if element is not None:
             if self.shown is None:
@@ -468,6 +619,13 @@ class Tester:
             if target is None:
                 raise ToolError("element [%s] %r is no longer on screen - call screen() again"
                                 % (element, old.text or old.type))
+            copies = before.find(text=target.text) if target.text else []
+            if len(copies) > 1:
+                hit = self._hittable(copies)
+                if hit.get(target.index) is False:
+                    raise ToolError("element [%s] %r is a hidden copy (not hittable) - a tap would land on whatever "
+                                    "is drawn there. Tap a visible copy instead." % (element, target.text),
+                                    hittable_copies=[e.describe() for e in copies if hit.get(e.index)])
         elif text or ident:
             hits = before.find(text=text, ident=ident)
             if not hits:
@@ -475,6 +633,12 @@ class Tester:
                 raise ToolError("nothing on screen matches %r" % (text or ident),
                                 buttons=[b.label for b in before.buttons([comp])])
             hits = self._rank_fresh(before, hits)
+            if len(hits) > 1:
+                hit = self._hittable(hits)
+                visible = [e for e in hits if hit.get(e.index, True)]
+                if visible:
+                    self._hidden_skipped = len(hits) - len(visible)
+                    hits = visible
             target = hits[0]
             self._alternatives = hits[1:]
         if target is not None and not before.on_screen(target):
@@ -610,6 +774,9 @@ class Tester:
         before = self._foreground()
         comp = before.composer(self.chat)
         if comp is None:
+            if self._in_app_browser(before):
+                raise ToolError("an in-app web page covers the chat - nothing was sent. " + self.IN_APP_BROWSER_HINT,
+                                left_app="in_app_browser")
             raise ToolError("no chat composer (text input) visible", screen=before.listing(40))
         t = norm(text)
         if not allow_button_text and t not in self._sent:
@@ -646,61 +813,113 @@ class Tester:
             if (cur is not None and scr.is_empty_input(cur)) or bubble:
                 out = {"sent": text, "confirmed": True, "next": "call wait_for_reply"}
                 self._auto_session(out)
-                return out
+                return self._take_left_app(out)
             if self.clock() >= deadline:
                 return {"sent": text, "confirmed": False,
                         "warning": "Send was tapped once but the text is still in the composer. Do NOT send "
                                    "again - look at screen()/screenshot() first."}
             self.sleep(0.4)
 
+    def _observe(self, scr: Screen, ev_texts: List[str]) -> Dict[str, Any]:
+        """What is new on this screen since the user's last action."""
+        comp = scr.composer(self.chat)
+        rx = [re.compile(p, re.IGNORECASE) for p in self.chat.get("interim_labels") or [] if p]
+        busy = scr.typing_elements(self.chat)
+        new_el = [e for e in new_message_elements(self._before, scr, self._anchor, [comp], self._seen, ev_texts)
+                  if not any(b.index == e.index or b.contains(e) for b in busy)]  # the typing indicator
+        real = [e for e in new_el if not any(r.search(e.text) for r in rx)]
+        return {"comp": comp, "new_el": new_el, "real": real,
+                "interim": [e.text for e in new_el if e not in real],
+                "cards": [e.text for e in scr.carousel_texts() if norm(e.text) not in self._seen],
+                "app_alerts": [a for a in scr.app_alerts() if norm(a["label"]) not in self._seen]}
+
+    @staticmethod
+    def _ev_shown(ev_texts: List[str], shown: List[str]) -> bool:
+        hay = key(" ".join(shown))
+        return any(key(p)[:30] in hay for p in _paragraphs(ev_texts))
+
     def wait_for_reply(self, timeout_s: Optional[float] = None, quiet_ms: Optional[float] = None) -> Dict[str, Any]:
-        """Wait until new bot content appeared and the screen stopped changing."""
+        """Wait until new bot content appeared and the screen stopped changing.
+
+        With reply_evidence working, the bot's endpoint decides: texts the app draws on its own ("On it!")
+        never end the wait - it ends when the endpoint has the new reply and the screen shows it (or after
+        waits.render_grace_s), or at the timeout (then the texts are returned with local_only: true)."""
         waits = self.cfg["waits"]
         timeout = float(timeout_s if timeout_s is not None else waits["reply_timeout_s"])
         quiet = float(quiet_ms if quiet_ms is not None else waits["quiet_ms"]) / 1000.0
         poll = float(waits["poll_ms"]) / 1000.0
+        grace = float(waits.get("render_grace_s", 6.0))
+        ev_on = self._ev_base is not None
         start = self.clock()
         last_sig, stable_since = None, start
         ev: Optional[tuple] = None
         ev_seen_at: Optional[float] = None
-        grace = float(waits.get("render_grace_s", 6.0))
         polls = 0
         while True:
             scr = self._snapshot()
-            comp = scr.composer(self.chat)
             now = self.clock()
             sig = scr.signature()
             if sig != last_sig:
                 last_sig, stable_since = sig, now
-            new_el = new_message_elements(self._before, scr, self._anchor, [comp], self._seen)
-            cards = [e.text for e in scr.carousel_texts() if norm(e.text) not in self._seen]
-            if self._ev_base is not None and polls % 2 == 0:
+            if ev_on and polls % 2 == 0:
                 ev = self._evidence()
             polls += 1
-            ev_new = ev[1][self._ev_base:] if (ev is not None and self._ev_base is not None) else []
+            ev_new = ev[1][self._ev_base:] if (ev is not None and ev_on) else []
+            ev_texts = self._evidence_texts(ev_new)
+            o = self._observe(scr, ev_texts)
             typing = scr.typing(self.chat)
             settled = now - stable_since >= quiet
-            on_screen = bool(new_el or cards)
-            if ev_new and not on_screen and ev_seen_at is None:
+            on_screen = bool(o["real"] or o["cards"] or o["app_alerts"])
+            if ev_new and ev_seen_at is None:
                 ev_seen_at = now  # the bot answered; the app may draw it a moment later
-            if on_screen and settled and not typing:
+            if ev_on:
+                drawn = self._ev_shown(ev_texts, [e.text for e in o["real"]] + o["cards"]) or stable_since >= ev_seen_at \
+                    if ev_new else False
+                if ev_new and on_screen and settled and not typing and drawn:
+                    break
+                if ev_new and settled and now - ev_seen_at >= grace:
+                    break
+            elif on_screen and settled and not typing:
                 break
-            if ev_new and not on_screen and ev_seen_at is not None and now - ev_seen_at >= grace:
-                break
-            if scr.alerts or now - start >= timeout:
+            if scr.alerts or self._in_app_browser(scr) or now - start >= timeout:
                 break
             self.sleep(poll)
+
+        # A reply longer than the screen: its first bubbles are above the top edge.
+        extra: List[str] = []
+        scrolled = 0
+        if self._anchor and o["real"] and not scr.alerts:
+            msgs = scr.messages([o["comp"]])
+            if (msgs and msgs[0].index == o["real"][0].index
+                    and not any(anchor_match(scr, m, self._anchor) for m in msgs)):
+                extra, scrolled, found = self._collect_above(o)
+                scr = self._snapshot()
+                o = self._observe(scr, ev_texts)
+        comp = o["comp"]
         self.shown = scr
         send = scr.send_button(self.chat, comp)
         buttons = scr.buttons([comp, send])
-        rows = group_options(new_el, buttons)
+        acts = scr.actions([comp])
+        rows = group_options(o["real"], buttons,
+                             [e for e in scr.visible() if e.type in ("cell", "other") and e.h <= 160])
         in_rows = {e.index for row in rows for e in row}
-        new = [e.text for e in new_el if e.index not in in_rows]
-        replied = bool(new_el or cards or ev_new)
+        new = extra + [e.text for e in o["real"] if e.index not in in_rows]
+        replied = bool(o["new_el"] or o["cards"] or ev_new or o["app_alerts"])
         out: Dict[str, Any] = {"replied": replied, "new_messages": new,
                                "buttons": ["[%d] %s%s" % (b.index, b.label or b.id, "" if b.enabled else " (disabled)")
                                            for b in buttons],
                                "waited_s": round(self.clock() - start, 1), "typing": typing}
+        if scrolled:
+            out["scrolled_up"] = scrolled
+            out["scroll_note"] = ("the reply was longer than the screen: scrolled up %d time(s) to read its start%s, "
+                                  "then back down" % (scrolled, "" if found else " (the start was not found)"))
+        if o["interim"]:
+            out["interim_messages"] = o["interim"]
+        if acts:
+            out["actions"] = ["[%d] %s" % (a.index, a.text) for a in acts]
+            out["actions_note"] = "tappable action cards (not chat text): tap(element=n) or tap(text=...)"
+        if o["app_alerts"]:
+            out["app_alerts"] = o["app_alerts"]
         if rows:
             out["options"] = ["[%d] %s" % (r[0].index, " · ".join(e.text for e in sorted(r, key=lambda e: e.x)))
                               for r in rows]
@@ -712,12 +931,12 @@ class Tester:
         carousel = scr.carousel_texts()
         if carousel:
             out["carousel"] = [e.describe() for e in carousel]
-            out["new_carousel_cards"] = cards
+            out["new_carousel_cards"] = o["cards"]
         ev_cfg = self.cfg.get("reply_evidence") or {}
-        if ev_cfg.get("endpoint") and self._ev_base is None:
+        if ev_cfg.get("endpoint") and not ev_on:
             out["evidence"] = ("off - no session id yet (find_session_id)" if not self.session_id
                                else "off - endpoint not reachable")
-        if self._ev_base is not None:
+        if ev_on:
             out["evidence_new_replies"] = len(ev_new)
             texts = self._evidence_texts(ev_new)
             if texts:
@@ -729,15 +948,28 @@ class Tester:
             opts = self._evidence_options(ev_new)
             if opts:
                 shown = {norm_label(e.text) for e in scr.visible() if e.text}
-                missing = [o for o in opts if norm_label(o) not in shown]
+                missing = [o_ for o_ in opts if norm_label(o_) not in shown]
                 out["evidence_options"] = opts
                 if missing:
                     out["evidence_options_missing"] = missing
                     out["note_options"] = ("the bot sent options that are not on screen: %s - not rendered "
                                            "(possible app/bot bug) or scrolled away; check screen()" % missing)
-            if ev_new and not new_el and not cards:
+            if texts and (o["new_el"] or o["cards"]):
+                hay = key(" ".join([m.text for m in scr.messages([comp])] + extra + o["cards"]
+                                   + [b.label for b in buttons] + [a.text for a in acts]))
+                gone = [p_ for p_ in _paragraphs(texts) if key(p_)[:60] not in hay]
+                if gone:
+                    out["evidence_texts_missing"] = [g[:300] for g in gone]
+                    out["note_missing"] = ("not on screen: scrolled away or not rendered (possible app bug) - check "
+                                           "screenshot()")
+            if ev_new and not o["new_el"] and not o["cards"]:
                 out["note"] = ("the endpoint shows a new bot reply but nothing new appeared on screen within %ss: it "
                                "repeats an earlier message, or it was not rendered - compare with screen()" % grace)
+            if not ev_new and (o["new_el"] or o["cards"]):
+                out["local_only"] = True
+                out["local_only_note"] = ("the app drew these texts, but the bot's endpoint shows no new reply within "
+                                          "%ss: a local/interim text, or reply_evidence.match does not fit - this is "
+                                          "not the bot's answer" % round(timeout))
         if not replied:
             out["timed_out"] = True
             out["hint"] = ("no new bot message - check screen()/screenshot(), read_log(since='turn') or "
@@ -745,6 +977,9 @@ class Tester:
                            "earlier message is not detected as new.")
         if scr.alerts:
             out["alerts"] = scr.alerts
+        if self._in_app_browser(scr):
+            out["left_app"] = "in_app_browser"
+            out["hint"] = self.IN_APP_BROWSER_HINT
         self._take_left_app(out)
         self._journal(dict(out, action="wait_for_reply"))
         if self.run and replied:
@@ -752,12 +987,41 @@ class Tester:
                                         "buttons": [b.label or b.id for b in buttons]})
         # Next wait compares against this screen unless a new action resets it.
         self._before = [m.text for m in scr.messages([comp])]
-        self._seen.update(norm(t) for t in self._before)
-        self._seen.update(norm(e.text) for e in carousel)
+        self._seen_add(extra + self._before + [e.text for e in carousel])
         self._anchor = ""
         if ev is not None:
             self._ev_base_all, self._ev_base = len(ev[0]), len(ev[1])
         return out
+
+    def _collect_above(self, o: Dict[str, Any]) -> tuple:
+        """Scroll up (at most MAX_SCROLL_UP swipes) until the user's message is visible, collect the bubbles
+        below it, then scroll back down. Returns (texts above the current screen, swipes, anchor found)."""
+        bottom = {norm(e.text) for e in o["new_el"]}
+        screens: List[List[str]] = []
+        found = False
+        swipes = 0
+        for _ in range(MAX_SCROLL_UP):
+            self.scroll("up")
+            swipes += 1
+            self.sleep(0.6)
+            scr = self._snapshot()
+            msgs = scr.messages([scr.composer(self.chat)])
+            hits = [m for m in msgs if anchor_match(scr, m, self._anchor)]
+            if hits:
+                low = max(hits, key=lambda m: m.y)
+                screens.append([m.text for m in msgs if m.y > low.y + 1 and m not in hits])
+                found = True
+                break
+            screens.append([m.text for m in msgs if norm(m.text) not in self._seen])
+        for _ in range(swipes):
+            self.scroll("down")
+        self.sleep(0.6)
+        merged: List[str] = []
+        for texts in reversed(screens):  # top-most screen first
+            for t in texts:
+                if norm(t) not in {norm(x) for x in merged}:
+                    merged.append(t)
+        return [t for t in merged if norm(t) not in bottom], swipes, found
 
     def scroll(self, direction: str = "up", amount: float = 0.5) -> Dict[str, Any]:
         """direction 'up' shows earlier content (finger moves down), 'down' shows later content."""
@@ -966,15 +1230,16 @@ class Tester:
         if app_err:
             out["app_log_error"] = app_err
         newest = next(iter(found), None)
-        if newest and (len(found) == 1 or conv) and self.session_id != newest:
-            # Within one conversation the newest id is the conversation's own one.
-            self.session_id = newest
-            out["current"] = newest
-            out["note"] = ("newest id since the last fresh launch - set as the current session id" if conv
-                           else "only one candidate - set as the current session id")
-            out["auto_picked"] = True
-        elif out.get("auto_picked"):
-            pass
+        if newest and (len(found) == 1 or conv):
+            if self.session_id != newest:
+                # Within one conversation the newest id is the conversation's own one.
+                self.session_id = newest
+                out["current"] = newest
+                out["note"] = ("newest id since the last fresh launch - set as the current session id" if conv
+                               else "only one candidate - set as the current session id")
+                out["auto_picked"] = True
+            else:
+                out["note"] = "the current session id is the newest one in the logs - nothing to do"
         elif not found:
             out["hint"] = ("no id found - ask the user how to find it (profile.md), then set_session_id(id). "
                            "Adjust session.regex in config.json if the logs show it in another format.")
@@ -1016,8 +1281,12 @@ class Tester:
         path = self._plan_file(name)
         text = path.read_text(encoding="utf-8")
         plan = parse_plan(text)
+        blocked = [{"row": r["row"], "why": r["result"].split(":", 1)[1].strip()} for r in plan["rows"]
+                   if r["result"].lower().startswith("blocked:")]
         out = {"path": str(path), "title": plan["title"], "conversations": plan["sections"],
-               "rows": public_rows(plan), "content": text}
+               "rows": public_rows(plan), "content": text,
+               "summary": {"rows": len(plan["rows"]), "runnable": len(plan["rows"]) - len(blocked),
+                           "blocked": blocked}}
         if not plan["rows"]:
             out["warning"] = "no table with the columns Flow | User prompt | Expected | Result found"
         return out

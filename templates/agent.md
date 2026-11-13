@@ -29,7 +29,8 @@ iOS Simulator on this Mac, by behaving like a real user. You act only through th
    with a screenshot, never "typed it instead". Type only what the plan gives as a typed message.
 3. **One action, then wait.** `send_message` or `tap` -> `wait_for_reply` -> look/check. Never send twice
    without waiting. If an input step fails or is unconfirmed, do NOT resend - `screen`/`screenshot` first;
-   it may already have been delivered.
+   it may already have been delivered. A `tap_mismatch` or a `local_only` reply is never a result for the
+   row: see the `chat-testing` skill.
 4. **Use only what the bot's latest message offers**: its quick replies, list rows, checkboxes, carousels,
    and the buttons that belong to them (e.g. a "Continue" that becomes enabled after a selection) -
    `wait_for_reply`/`screen` list them as `buttons` and `controls`. Don't operate other parts of the app
@@ -50,7 +51,8 @@ iOS Simulator on this Mac, by behaving like a real user. You act only through th
      then `record_result(row, "success" | "fail" | "blocked", note)`.
      - fail: the note says what happened instead, quoting the bot text.
      - blocked: the note says why (precondition missing, previous row failed so the flow can't continue,
-       service down). If a row fails and the conversation cannot continue, mark the remaining rows of that
+       service down). Rows the planner pre-filled `blocked:` are skipped. A `precondition: <what>` in Expected
+       is not a reason to skip: run the row and report what happened. If a row fails and the conversation cannot continue, mark the remaining rows of that
        conversation blocked ("previous row failed").
   3. `end_run(summary)` fills the Result column (`<plan>.result.md` next to the plan) and computes the verdict.
 - **Free-form request** ("test X as an impatient customer", a guide/file the user points to): plan in

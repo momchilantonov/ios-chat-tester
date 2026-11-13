@@ -49,11 +49,14 @@ TOOLS: List[Dict[str, Any]] = [
                                    "(only when the test explicitly requires typing it).", default=False)}, ["text"]),
     _tool("wait_for_reply", "Wait until the bot's new messages have appeared and the screen is quiet. Returns "
           "new_messages, the visible buttons with [index] and rich controls (list rows, checkboxes, switches; "
-          "SELECTED marks the selected ones). Call after every send_message or tap that should make the bot answer.",
+          "SELECTED marks the selected ones), options, actions (tappable cards) and the bot's evidence. "
+          "local_only: true = text the app drew without a bot reply - not the answer. Call after every "
+          "send_message or tap that should make the bot answer.",
           {"timeout_s": _s("number", "Max seconds (default from config)."),
            "quiet_ms": _s("number", "How long the screen must be unchanged (default from config).")}),
     _tool("tap", "Tap something: a button/element by [index] from the last screen/wait_for_reply, by visible "
-          "text, by accessibility id, by x/y points, or a system alert button.",
+          "text, by accessibility id, by x/y points, or a system alert button. tap_mismatch in the result = "
+          "the app sent another label than asked: the step is invalid, not a bot result.",
           {"element": _s("integer", "Index from the last listing."), "text": _s("string", "Visible text/label."),
            "id": _s("string", "Accessibility identifier."), "x": _s("number", "X in points."),
            "y": _s("number", "Y in points."), "alert_button": _s("string", "Label of a system alert button.")}),

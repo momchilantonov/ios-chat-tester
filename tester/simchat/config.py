@@ -20,6 +20,7 @@ DEFAULTS: Dict[str, Any] = {
         "typing_ids": [],
         "typing_labels": [],
         "ignore_labels": [],
+        "interim_labels": [],
     },
     "session": {"regex": [
         r"(?i)\b(?:sender|session|conversation|tracker)[_ -]?id\b[\"'\s:=]+[\"']?([A-Za-z0-9][A-Za-z0-9._:@-]{5,})",
@@ -30,7 +31,7 @@ DEFAULTS: Dict[str, Any] = {
                        "flow": ""},
     "pace_ms": 400,
     "waits": {"reply_timeout_s": 45, "quiet_ms": 2000, "poll_ms": 600, "send_confirm_s": 10,
-              "render_grace_s": 6, "app_switch_s": 2.0, "session_find_s": 4},
+              "render_grace_s": 6, "app_switch_s": 6.0, "session_find_s": 4},
     "endpoints": {},
     "logs": {},
     "error_patterns": ["Traceback", "ERROR", "Exception"],

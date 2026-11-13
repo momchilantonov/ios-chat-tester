@@ -339,6 +339,7 @@ class Installer:
                                    stdout=fh, stderr=subprocess.STDOUT)
         if code == 0:
             self.say("  ok       driver built")
+            self._restart_hint()
         else:
             tail = log.read_text(encoding="utf-8", errors="replace").splitlines()
             errors = [ln for ln in tail if "error:" in ln][-8:] or tail[-8:]
@@ -467,6 +468,20 @@ class Installer:
                 return 0
             self.dry = False
         return self._uninstall()
+
+    def _restart_hint(self):
+        """A driver started before this update keeps running the old build: stop it (only our own process),
+        so the next start_driver starts the new one."""
+        sys.path.insert(0, str(TESTER))
+        try:
+            from simchat.config import load_config
+            from simchat.driver import STATE_FILE, DriverManager, Simulator
+        except ImportError:
+            return
+        if STATE_FILE.exists():
+            cfg = load_config()
+            DriverManager(cfg, Simulator(cfg)).stop()
+            self.say("  stop     the running UI driver (old build) - the agent's start_driver starts the new one")
 
     def _driver_cleanup(self):
         sys.path.insert(0, str(TESTER))

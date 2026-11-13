@@ -42,9 +42,11 @@ Source: <flow files / ticket / guide section the plan was made from>
   not judged. The tester brings the app back automatically.
 - **Result** is filled by the tester: `success` · `fail: <what happened instead>` ·
   `blocked: <why it could not be executed>`. Rows not run end up as `blocked: not run`.
-  The planner may **pre-fill** `blocked: needs <precondition>` for a row that only works with test data or a
-  setup the tester cannot create (special mock data, back-end error injection, another customer segment). The
-  tester skips such rows and keeps the text. Never write a row that can only fail as written.
+  The planner may **pre-fill** `blocked: needs <precondition>` only when the source explicitly says the row
+  needs data/setup that differs from the default test user (special mock data, back-end error injection,
+  another customer segment), or an action the tester must not do (sign, pay, confirm, hand-off). The tester
+  skips such rows and keeps the text. Any other row stays runnable; a softer condition goes into Expected as
+  `precondition: <what>`, and the tester runs the row and reports what happened.
 - No placeholders in prompts (`tap <some card>` is invalid) - use a real label from the bot's texts/mocks or
   a positional form above.
 - Keep cells on one line; use `\|` for a literal pipe.

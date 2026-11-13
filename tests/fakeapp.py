@@ -22,7 +22,19 @@ BOT = {
     "link": ("Read more on our website.", ["Open link"]),
     "confirm": ("Block these cards?", ["Confirm", "Cancel"]),
     "menu": ("What would you like to do?", ["A transfer", "B payment", "C rates", "D limits", "E other"]),
+    "products": ("Which product?", ["Overdraft", "Credit card"]),
+    "consent": ("Do you want to keep your consent?", ["Keep consent", "Withdraw"]),
+    "loans": ("Please choose 👇", ["Car loan", "Home loan"]),
+    "main": ("Please choose 👇", ["Loans", "Cards"]),
+    "transfer": ("Here is what I can do for you:", []),
+    "faq": ("\n\n".join("Paragraph %d of the long answer explains one more aspect of the topic in enough words "
+                         "to need several lines on a phone screen." % i for i in range(1, 6)), []),
+    "long option": ("Choose how to continue with your request:", ["Show me the details of my current account balance",
+                                                                  "Something else"]),
+    "show me the details of my current account balance": (
+        "Account overview", []),
 }
+LONG_TITLE = "Show me the details of my curr"  # first 30 characters of the long option
 
 
 class FakeApp:
@@ -46,6 +58,14 @@ class FakeApp:
         self.chip_strip = False      # quick replies as buttons "X." inside a horizontal strip, captions as texts
         self.reverse_order = False   # accessibility order of quick replies differs from screen order
         self.rows_as_text = False    # picker rows as two text elements each, no cell/checkbox/selected state
+        self.rows_stacked = False    # picker rows as a cell with two stacked texts (name above number)
+        self.hidden_copy = ""        # a hidden (not hittable) copy of this button drawn over the lowest button
+        self.no_hittable = False     # an old driver without the "hittable" command
+        self.interim = ""            # the app draws this text at once (no bot event), the bot answers later
+        self.skip_paragraph = None   # this bubble of a multi-bubble reply is never drawn
+        self.web_sheet = False       # "Open link" opens an in-app web page over the chat
+        self.long_title_panel = False  # the bot's reply to "long option" has a panel titled like the option
+        self.toast = ""              # an in-app banner at the top (exposed as a view with a "toast" id)
         self.lock = threading.Lock()
         self.received = []           # what the "bot" received: {"text"} or {"payload"}
         self.commands = []
@@ -72,6 +92,8 @@ class FakeApp:
         self.events = []             # what the bot's event export shows: (who, text, options)
         self.drawn_at = None         # when the pending reply becomes visible
         self.switch_at = None
+        self.offset = 0.0            # how far the user scrolled up (0 = at the bottom)
+        self.actions = []            # full-width action rows ("New transfer ›")
         if self.welcome:
             self.messages.append(("bot", "Welcome! How can I help?"))
 
@@ -83,8 +105,12 @@ class FakeApp:
         self.buttons = []
         self.received.append({"payload": payload} if payload else {"text": text})
         self.scroll_until = time.monotonic() + 0.6
+        self.offset = 0.0
+        self.actions = []
         if self.silent:
             return
+        if self.interim:
+            self.messages.append(("bot", self.interim))
         key = (payload or text).strip().lower().lstrip("/")
         reply = BOT["hello"] if key in ("hello", "здравей") else BOT.get(key)
         if reply is None:
@@ -100,10 +126,18 @@ class FakeApp:
         if self.pending and self.drawn_at is not None and now >= self.drawn_at:
             self.drawn_at = None
             text, buttons = self.pending
-            self.messages.append(("bot", text))
+            for i, part in enumerate(text.split("\n\n")):  # a long answer comes as several bubbles
+                if i != self.skip_paragraph:
+                    self.messages.append(("bot", part))
+            if self.long_title_panel and text == "Account overview":
+                self.messages.append(("bot", LONG_TITLE + " (panel)"))
+                self.messages.append(("bot", "Balance: 1 234 EUR"))
             self.buttons = [(b, b.lower()) for b in buttons]
             if text.startswith("Select the cards"):
                 self.rows = [["Visa ****1111", False], ["Mastercard ****2222", False]]
+            if text.startswith("Here is what I can do"):
+                self.actions = ["New transfer ›"]
+            self.offset = 0.0
             self.pending = None
             self.scroll_until = time.monotonic() + 0.6
 
@@ -114,6 +148,11 @@ class FakeApp:
     def elements(self):
         self._tick()
         els = self._base()
+        if self.screen == "web":
+            return self._defaults([
+                {"type": "webView", "label": "", "id": "", "value": "", "x": 0, "y": 90, "w": W, "h": H - 90},
+                {"type": "text", "label": "Example page", "id": "", "value": "", "x": 20, "y": 120, "w": 300, "h": 30},
+                {"type": "button", "label": "Done", "id": "", "value": "", "x": 10, "y": 50, "w": 60, "h": 30}])
         if self.screen == "menu":
             els += [{"type": "button", "label": "Local Flow", "id": "", "value": "", "x": 20, "y": 200, "w": 350, "h": 44},
                     {"type": "button", "label": "Open chat", "id": "", "value": "", "x": 20, "y": 260, "w": 350, "h": 44}]
@@ -127,6 +166,8 @@ class FakeApp:
             rows.append(("carousel", None, None))
         for i in range(len(self.rows)):
             rows.append(("row", i, None))
+        for i in range(len(self.actions)):
+            rows.append(("action", i, None))
         if self.chip_strip and self.buttons:
             rows.append(("strip", None, None))
         else:
@@ -138,15 +179,22 @@ class FakeApp:
         placed = []
         for row in rows:
             placed.append((row, y))
-            y += 60
+            y += 210 if row[0] == "msg" and len(row[2]) > 80 else 60  # long texts are tall bubbles
         shift = max(0.0, y - 740)  # chat sticks to the bottom; old rows scroll off the top
+        self.offset = max(0.0, min(self.offset, shift))
         for row, ry in placed:
-            ry -= shift
+            ry -= shift - self.offset
             kind = row[0]
             if kind == "msg":
                 x = 150 if row[1] == "user" else 10
-                els.append({"type": "other", "label": row[2], "id": "", "value": "", "x": x, "y": ry, "w": 230, "h": 50})
-                els.append({"type": "text", "label": row[2], "id": "", "value": "", "x": x + 5, "y": ry + 5, "w": 220, "h": 40})
+                h = 200 if len(row[2]) > 80 else 50
+                els.append({"type": "other", "label": row[2], "id": "", "value": "", "x": x, "y": ry, "w": 230, "h": h})
+                els.append({"type": "text", "label": row[2], "id": "", "value": "", "x": x + 5, "y": ry + 5, "w": 220, "h": h - 10})
+            elif kind == "action":
+                label = self.actions[row[1]]
+                els.append({"type": "other", "label": label, "id": "act.%d" % row[1], "value": "", "x": 0, "y": ry,
+                            "w": W, "h": 44, "_action": label})
+                els.append({"type": "text", "label": label, "id": "", "value": "", "x": 16, "y": ry + 10, "w": 200, "h": 24})
             elif kind == "sep":
                 els.append({"type": "text", "label": row[1], "id": "", "value": "", "x": 170, "y": ry + 15, "w": 50, "h": 20})
             elif kind == "btn":
@@ -160,7 +208,13 @@ class FakeApp:
                 els.append({"type": "text", "label": row[1], "id": "", "value": "", "x": 20, "y": ry + 10, "w": 150, "h": 24})
             elif kind == "row":
                 label, sel = self.rows[row[1]]
-                if self.rows_as_text:
+                if self.rows_stacked:
+                    name, number = label.split(" ", 1)
+                    els.append({"type": "cell", "label": "", "id": "", "value": "", "x": 10, "y": ry, "w": 370, "h": 56,
+                                "selected": sel, "_row": row[1]})
+                    els.append({"type": "text", "label": name, "id": "", "value": "", "x": 20, "y": ry + 4, "w": 150, "h": 22})
+                    els.append({"type": "text", "label": number, "id": "", "value": "", "x": 20, "y": ry + 28, "w": 150, "h": 22})
+                elif self.rows_as_text:
                     name, number = label.split(" ", 1)
                     els.append({"type": "text", "label": name, "id": "", "value": "", "x": 20, "y": ry + 10, "w": 150, "h": 24})
                     els.append({"type": "text", "label": number, "id": "", "value": "", "x": 200, "y": ry + 12, "w": 150, "h": 22})
@@ -187,9 +241,18 @@ class FakeApp:
         if self.scrollbars and time.monotonic() < self.scroll_until:
             els.append({"type": "other", "label": "Vertical scroll bar, 2 pages", "id": "", "value": "0%",
                         "x": 384, "y": 95, "w": 3, "h": 650})
+        if self.hidden_copy:
+            qr = [e for e in els if e["id"].startswith("qr.")]
+            if qr:
+                low = max(qr, key=lambda e: e["y"])
+                els.append({"type": "button", "label": self.hidden_copy, "id": "", "value": "", "x": low["x"],
+                            "y": low["y"], "w": low["w"], "h": low["h"], "_hidden": True})
         for i, label in enumerate(self.stale):  # dead copies: tapping them does nothing
             els.append({"type": "button", "label": label, "id": "", "value": "",
                         "x": 10 + 210 * i, "y": self.stale_y, "w": 200, "h": 44})
+        if self.toast:
+            els.append({"type": "other", "label": self.toast, "id": "toastBanner", "value": "", "x": 8, "y": 95,
+                        "w": W - 16, "h": 50})
         if self.banner:
             els.append({"type": "text", "label": self.banner, "id": "", "value": "", "x": 100, "y": 95, "w": 190, "h": 20})
         if self.menu:
@@ -229,7 +292,7 @@ class FakeApp:
             if self.switch_at is not None and time.monotonic() >= self.switch_at:
                 self.state, self.switch_at = "backgroundSuspended", None
             if cmd == "ping":
-                return {"driver": "simchat", "version": 1}
+                return {"driver": "simchat", "version": 2}
             if cmd == "state":
                 return {"app_state": self.state}
             if cmd == "activate":
@@ -238,6 +301,14 @@ class FakeApp:
             if cmd == "launch":
                 self.reset()
                 return {"app_state": self.state}
+            if cmd == "hittable":
+                if self.no_hittable:
+                    return {"error": "unknown command 'hittable'"}
+                found = [e for e in (self.elements() if self.state == "foreground" else [])
+                         if (e["label"] == args.get("label") if args.get("label") else e["id"] == args.get("id"))
+                         and (not args.get("type") or e["type"] == args["type"])]
+                return {"elements": [{"x": e["x"], "y": e["y"], "w": e["w"], "h": e["h"],
+                                      "hittable": not e.get("_hidden")} for e in found]}
             if cmd == "snapshot":
                 if self.state != "foreground":
                     return {"app_state": self.state, "elements": [], "keyboard": False, "alerts": []}
@@ -245,6 +316,10 @@ class FakeApp:
                         "elements": self.elements(), "alerts": []}
             if cmd == "tap":
                 x, y = float(args["x"]), float(args["y"])
+                if self.screen == "web":
+                    if 10 <= x <= 70 and 50 <= y <= 80:
+                        self.screen = "chat"
+                    return {}
                 if self.screen == "menu":
                     for e in self.elements():
                         if e["type"] == "button" and self._hit(e, x, y) and e["label"] == "Open chat":
@@ -268,6 +343,12 @@ class FakeApp:
                                     row[1] = not row[1]
                                     return {}
                 for e in self.elements():
+                    if e.get("_action") and self._hit(e, x, y):
+                        self._user(e["_action"], payload="/" + e["_action"].rstrip(" ›").lower())
+                        return {}
+                    if e["type"] == "cell" and "_row" in e and self._hit(e, x, y):
+                        self.rows[e["_row"]][1] = not self.rows[e["_row"]][1]
+                        return {}
                     if e["type"] == "cell" and self._hit(e, x, y):
                         for row in self.rows:
                             if row[0] == e["label"]:
@@ -278,7 +359,9 @@ class FakeApp:
                             return {}
                         label = next(b for b, _ in self.buttons if "qr." + b.lower() == e["id"])
                         if label == "Open link":      # opens Safari: the app goes to the background
-                            if self.switch_delay:
+                            if self.web_sheet:
+                                self.screen = "web"
+                            elif self.switch_delay:
                                 self.switch_at = time.monotonic() + self.switch_delay
                             else:
                                 self.state = "background"
@@ -309,6 +392,9 @@ class FakeApp:
                     if e["type"] == "collectionView" and self._hit(e, x1, y1) and abs(x2 - x1) > abs(y2 - y1):
                         step = 1 if x2 < x1 else -1  # finger left -> next item
                         self.carousel_pos = max(0, min(len(self.carousel) - 1, self.carousel_pos + step))
+                        return {}
+                if abs(y2 - y1) > abs(x2 - x1):  # finger down = scroll up to earlier messages
+                    self.offset = max(0.0, self.offset + (y2 - y1))
                 return {}
             if cmd == "long_press":
                 x, y = float(args["x"]), float(args["y"])

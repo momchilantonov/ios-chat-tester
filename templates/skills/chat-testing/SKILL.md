@@ -20,11 +20,25 @@ wait_for_reply()
   `replied: false` + `timed_out` means nothing new arrived - look (`screen`, `screenshot`) and read the log
   before deciding it is a bug. A slow bot is not a missing answer: one more `wait_for_reply(timeout_s=60)`
   is fine.
+- **`tap_mismatch`** (`{"asked": ..., "sent": ...}`): your tap landed on another element - the app shows a
+  different text as your message. That step is **invalid, not a bot result**: don't judge the reply against
+  the row. `screen()`, tap the right `[index]` and continue; if it repeats, record the row `blocked` with the
+  mismatch. `skipped_hidden_copies` means invisible copies of the label were avoided - nothing to do.
 - **Links / deeplinks**: when a tap opens another app (Safari, even a 404 page), `tap` returns
   `left_app: true` and brings the app back. That is the expected Simulator behaviour - if the row expects a
   link, record `success`; never report the opened page as a bug. Then `screen()`: the chat may have reset.
+  An in-app web page instead returns `left_app: "in_app_browser"`: also success for a link row; close it with
+  its Close/Done button (`screen()` lists it) before the next message.
+- **`local_only: true`**: the app drew text but the bot's endpoint has no new reply - a local "please wait"
+  text, not the bot's answer. `wait_for_reply()` again for the real reply; if none comes, that's the finding.
+  `interim_messages` are such texts the config marks (`chat.interim_labels`); never judge the row by them.
 - **Long messages**: the screen may show only the first part of a long bubble. For exact-text checks use the
   endpoint evidence (`evidence_texts` from `wait_for_reply` when configured, or `fetch`) and say so in the note.
+  A reply longer than the screen is read from its start automatically (`scrolled_up`). `evidence_texts_missing`
+  lists paragraphs the bot sent that were not found on screen: scrolled away or not rendered - `screenshot()`
+  and decide; not rendered is an app bug (S2).
+- **Action cards** (`actions: ["[n] New transfer ›"]`): full-width rows the user can tap, not chat text.
+  Tap them like options.
 - **Options are tapped, never typed.** Some apps don't expose quick replies as buttons; then their labels
   appear in `new_messages`/`screen()` as text. Tap them anyway: `tap(element=n)` or `tap(text="label")`.
   `send_message` refuses to type a label that is on screen and tells you which element to tap.
@@ -40,8 +54,10 @@ wait_for_reply()
   marks the selected state and `(disabled)` marks buttons that are not usable yet. Typical: tap a row ->
   `screen()` to confirm it is SELECTED and that "Continue" is enabled -> tap "Continue" -> `wait_for_reply`.
   Row taps usually don't make the bot answer; only call `wait_for_reply` after the action that sends.
-- A reply identical to an earlier message is not reported as new (the screen keeps old copies). If you
-  expect that, check with `screen()` or the endpoint evidence.
+- A reply identical to an earlier message: below your new message it is reported when something follows it
+  (buttons) or the endpoint evidence confirms it; otherwise only the endpoint shows it (a `note` says so).
+  `screen()` lists suspected `hidden_copies` of old bubbles separately.
+- `app_alerts`: in-app alerts, sheets and banners. Read them; tap their buttons only if harmless.
 - Long replies may scroll. If the reply looks cut off, `screen()`; `scroll("up")` to read earlier parts.
 
 ## Swiping, carousels, long press

@@ -24,7 +24,8 @@ python3 install.py --name <agent-name> --bundle-id <bundle id> --app-repo <ios a
   the `simchat` MCP server for Copilot CLI and VS Code. It writes the launchers `tester/bin/<agent-name>` and
   `tester/bin/<agent-name>-planner` and builds the UI driver with `xcodebuild`.
 - Exit code 1 means there are things to fix. They are listed at the end of the output.
-- **After every update, restart the agents.** A running session keeps the old instructions.
+- **After every update, restart the agents.** A running session keeps the old instructions. If `status`
+  shows `driver.outdated`, call `stop_driver`, then `start_driver` (it rebuilds).
 - **Read the newest section of `CHANGELOG.md`.** It names new config keys to set in `tester/config.json` (the
   installer never changes your existing config) and lists what to test again.
 - If the output has `WARN ... <name>.agent.md exists`: a same-named agent file in a repo can take precedence
@@ -43,6 +44,7 @@ python3 install.py --name <agent-name> --bundle-id <bundle id> --app-repo <ios a
 | `reply_evidence` | `endpoint`, `list`, `match`, `text` that pick bot replies out of that endpoint's JSON; optional `options` (path to the quick replies in a bot event) or `option_regex`, and `flow` (path to the flow id in each event) | fetch one real response and look at its structure, e.g. `python3 tester/simchat_server.py fetch endpoint=extract` after `find_session_id` |
 | `logs` | bot log file(s), e.g. `{"bot": "~/chat-logs/bot.log"}` | the human starts the bot with `... 2>&1 \| tee <file>`; without it, `app_log` still works |
 | `chat.ignore_labels` | regexes for screen noise: scroll-bar labels, date separators, debug banners | `screen` output: labels that are never chat content |
+| `chat.interim_labels` | regexes for texts the app draws itself while the bot works ("On it!") | a reply that came back with `local_only: true` |
 | `chat.send_labels` / `send_ids` | only if the Send button isn't found | `screen` output |
 | `session.regex` | only if `find_session_id` finds nothing | a log line that contains the id |
 | `simulator.udid` | only if several simulators are booted | `xcrun simctl list devices booted` |
@@ -105,7 +107,9 @@ working. Don't touch the same Simulator, don't press Run in Xcode, and keep the 
 
 **Timing settings** (`waits` in `config.json`):
 - `render_grace_s` (default 6): how long to wait for the screen after the endpoint already shows the reply.
-- `app_switch_s` (default 2): how long to watch for a link opening another app after each tap.
+- `app_switch_s` (default 6): how long to watch for a link opening another app after a tap. The watch stops
+  as soon as the chat changes, so normal taps don't wait that long. Configs from before round 5 have `2.0`:
+  change it to `6`.
 - `session_find_s` (default 4): how long to look for the session id after the first message.
 
 ## 6. Evaluate and report back

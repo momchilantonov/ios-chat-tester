@@ -15,6 +15,8 @@ CONTAINER_TYPES = ("scrollView", "collectionView", "table")  # swipe targets suc
 CONTROL_TYPES = ("cell", "switch", "toggle", "checkBox", "radioButton", "slider", "segmentedControl",
                  "picker", "pickerWheel", "stepper")  # rich components: list rows, checkboxes, ...
 THIN_PT = 8.0  # scroll indicators are a few points wide; real text is never this thin
+ALERT_TYPES = ("alert", "sheet")
+BANNER_RX = re.compile(r"banner|toast|snackbar|notification", re.IGNORECASE)
 
 
 def norm(text: str) -> str:
@@ -23,8 +25,29 @@ def norm(text: str) -> str:
 
 
 def norm_label(text: str) -> str:
-    """Label comparison: like norm, and iOS's trailing '.' on button labels ("Confirm.") is ignored."""
-    return norm(text).rstrip(" .")
+    """Label comparison: like norm; iOS's trailing '.' on button labels ("Confirm.") and a trailing chevron
+    ("New transfer ›") are ignored."""
+    return norm(text).rstrip(" .›>❯")
+
+
+def key(text: str) -> str:
+    """Loose comparison form: letters and digits only (markdown, punctuation, emoji and spacing dropped)."""
+    return "".join(ch for ch in norm(text) if ch.isalnum())
+
+
+def anchor_match(scr: "Screen", e: "Element", anchor: str) -> bool:
+    """Is e the user's own message/tap echo for this anchor? Exact (norm_label); a prefix only for a bubble
+    on the user's side (the echo of a long label may be truncated)."""
+    a = norm_label(anchor)
+    if not a:
+        return False
+    t = norm_label(e.text)
+    if t == a:
+        return True
+    if not scr.user_side(e):
+        return False
+    t = t.rstrip("…")
+    return (len(a) > 30 and t.startswith(a[:30])) or (len(t) >= 10 and a.startswith(t))
 
 
 def exact(text: str) -> str:
@@ -102,6 +125,10 @@ class Screen:
                 selected=bool(e.get("selected", False)), x=float(e.get("x", 0)), y=float(e.get("y", 0)), w=float(e.get("w", 0)), h=float(e.get("h", 0))))
 
     # -- geometry -------------------------------------------------------------------------------
+    def user_side(self, e: Element) -> bool:
+        """Right-aligned: the user's own bubbles (and tap echoes) in a chat."""
+        return bool(self.width) and e.x > self.width * 0.2 and e.x + e.w / 2 > self.width * 0.5
+
     def on_screen(self, e: Element) -> bool:
         if not self.width or not self.height:
             return True
@@ -187,37 +214,80 @@ class Screen:
                        and e.index not in skip and (e.text or e.id) and not self.is_noise(e)],
                       key=lambda e: (round(e.y), e.x))
 
-    def messages(self, exclude: Iterable[Optional[Element]] = ()) -> List[Element]:
-        """Text-bearing elements top to bottom, without inputs, button captions and wrapper duplicates."""
+    def _message_candidates(self, exclude: Iterable[Optional[Element]] = ()) -> List[Element]:
         excluded = [x for x in exclude if x is not None]
         skip = {x.index for x in excluded}
         buttons = [e for e in self.visible() if e.type in BUTTON_TYPES]
         chrome = [e for e in self.visible() if e.type in CHROME_TYPES]
-        cands = [e for e in self.visible()
-                 if e.type in TEXT_TYPES and e.text.strip() and e.index not in skip
-                 and not self.is_noise(e)
-                 and not self._inside_any(e, excluded)          # e.g. a custom placeholder label in the composer
-                 and not self._inside_any(e, self.carousels())  # carousel cards are reported separately
-                 and not any(b.index != e.index and b.contains(e) for b in buttons)
-                 and not self._covered_by_button(e)
-                 and not any(c.contains(e) for c in chrome)]
+        overlays = self.app_alert_elements()
+        return [e for e in self.visible()
+                if e.type in TEXT_TYPES and e.text.strip() and e.index not in skip
+                and not self.is_noise(e)
+                and not self._inside_any(e, excluded)          # e.g. a custom placeholder label in the composer
+                and not self._inside_any(e, self.carousels())  # carousel cards are reported separately
+                and not any(b.index != e.index and b.contains(e) for b in buttons)
+                and not self._covered_by_button(e)
+                and not any(c.contains(e) for c in chrome)
+                and not any(o.index == e.index or o.contains(e) for o in overlays)]
+
+    def actions(self, exclude: Iterable[Optional[Element]] = ()) -> List[Element]:
+        """Tappable action cards that iOS exposes as plain views: a full-width, single-line row with a short
+        label that is not a sentence (e.g. "New transfer ›"), below the last chat bubble."""
+        if not self.width:
+            return []
+        cands = self._message_candidates(exclude)
+        rows = [e for e in cands if e.type == "other" and e.w >= self.width * 0.8 and e.h <= 64
+                and "\n" not in e.text and len(e.text.strip()) <= 40
+                and not e.text.strip().endswith((".", "?", "!", ":"))]
+        if not rows:
+            return []
+        others = [e for e in cands if not any(r.contains(e) for r in rows)]
+        last = max((e.y for e in others), default=-1e9)
+        return sorted([r for r in rows if r.y > last], key=lambda e: (round(e.y), e.x))
+
+    def messages(self, exclude: Iterable[Optional[Element]] = ()) -> List[Element]:
+        """Text-bearing elements top to bottom, without inputs, button captions, action cards and wrapper
+        duplicates."""
+        exclude = list(exclude)
+        acts = self.actions(exclude)
+        cands = [e for e in self._message_candidates(exclude) if not any(a.contains(e) for a in acts)]
         out = []
         for e in cands:
-            if e.type in ("other", "cell"):  # a wrapper repeating the text of a child element
-                if any(c is not e and e.contains(c) and norm(c.text) == norm(e.text) for c in cands):
+            if e.type in ("other", "cell"):
+                inner = [c for c in cands if c is not e and e.contains(c)]
+                # a wrapper repeating the text of a child element, or the texts of its children joined
+                if any(norm(c.text) == norm(e.text) for c in inner):
+                    continue
+                if len(inner) > 1 and key(e.text) == key("".join(c.text for c in sorted(inner, key=lambda c: (c.y, c.x)))):
                     continue
             out.append(e)
         return sorted(out, key=lambda e: (round(e.y), e.x))
 
-    def typing(self, chat: Dict[str, Any]) -> bool:
+    def app_alert_elements(self) -> List[Element]:
+        """In-app alerts, action sheets and banners/toasts (the system's own alerts are in self.alerts)."""
+        return [e for e in self.visible() if e.type in ALERT_TYPES
+                or (e.type in ("other", "text") and e.id and BANNER_RX.search(e.id))]
+
+    def app_alerts(self) -> List[Dict[str, Any]]:
+        out = []
+        for a in self.app_alert_elements():
+            inner = [e for e in self.visible() if e.index != a.index and a.contains(e)]
+            texts = [e.text for e in inner if e.type not in BUTTON_TYPES and e.text]
+            out.append({"kind": "banner" if a.type not in ALERT_TYPES else a.type, "label": a.text or " ".join(texts)[:300],
+                        "buttons": ["[%d] %s" % (b.index, b.label or b.id) for b in inner if b.type in BUTTON_TYPES]})
+        return out
+
+    def web_view(self) -> bool:
+        return any(e.type == "webView" for e in self.visible())
+
+    def typing_elements(self, chat: Dict[str, Any]) -> List[Element]:
         ids = set(chat.get("typing_ids") or [])
         labels = [norm(x) for x in chat.get("typing_labels") or []]
-        for e in self.visible():
-            if e.id and e.id in ids:
-                return True
-            if labels and any(lbl and lbl in norm(e.text) for lbl in labels):
-                return True
-        return False
+        return [e for e in self.visible() if (e.id and e.id in ids)
+                or (labels and any(lbl and lbl in norm(e.text) for lbl in labels))]
+
+    def typing(self, chat: Dict[str, Any]) -> bool:
+        return bool(self.typing_elements(chat))
 
     def find(self, text: str = "", ident: str = "", prefer: Sequence[str] = BUTTON_TYPES) -> List[Element]:
         """Candidates for a tap target: exact id; exact label (any element); then - only for buttons and controls
@@ -230,7 +300,8 @@ class Screen:
             t = norm_label(text)
             hits = [e for e in vis if t and (norm_label(e.label) == t or norm_label(e.value) == t)]
             if not hits and t and (len(t) > 4 or " " in t):
-                tappable = [e for e in vis if e.type in BUTTON_TYPES + CONTROL_TYPES]
+                acts = {e.index for e in self.actions()}
+                tappable = [e for e in vis if e.type in BUTTON_TYPES + CONTROL_TYPES or e.index in acts]
                 word = re.compile(r"(?<!\w)%s(?!\w)" % re.escape(t))
                 hits = [e for e in tappable if word.search(norm(e.label)) or word.search(norm(e.value))]
                 if not hits:
@@ -244,7 +315,8 @@ class Screen:
         return min(same, key=lambda e: abs(e.y - old.y) + abs(e.x - old.x))
 
     def signature(self) -> tuple:
-        return tuple((e.type, e.text, round(e.y)) for e in self.visible() if e.text)
+        return tuple((e.type, e.text, round(e.y), e.selected, e.enabled) for e in self.visible()
+                     if e.text or e.type in CONTROL_TYPES + BUTTON_TYPES)
 
     def listing(self, limit: int = 120) -> List[str]:
         vis = [e for e in self.visible()
@@ -256,45 +328,74 @@ class Screen:
 
 
 def new_messages(before: Sequence[str], screen: Screen, anchor: str,
-                 exclude: Iterable[Optional[Element]] = (), seen: Iterable[str] = ()) -> List[str]:
-    return [e.text for e in new_message_elements(before, screen, anchor, exclude, seen)]
+                 exclude: Iterable[Optional[Element]] = (), seen: Iterable[str] = (),
+                 confirm: Iterable[str] = ()) -> List[str]:
+    return [e.text for e in new_message_elements(before, screen, anchor, exclude, seen, confirm)]
+
+
+def _confirmed(text: str, confirm: Sequence[str]) -> bool:
+    k = key(text)[:60]
+    return bool(k) and any(k in c for c in confirm)
 
 
 def new_message_elements(before: Sequence[str], screen: Screen, anchor: str,
-                         exclude: Iterable[Optional[Element]] = (), seen: Iterable[str] = ()) -> List[Element]:
+                         exclude: Iterable[Optional[Element]] = (), seen: Iterable[str] = (),
+                         confirm: Iterable[str] = ()) -> List[Element]:
     """Bot texts that appeared after the user's action.
 
-    With an anchor (the text the user sent, or the tapped quick reply) that is still visible, only texts
-    below its lowest occurrence count. Otherwise: what is on screen now minus what was there before.
-    Either way, a text already seen earlier in this conversation is never new: chat lists re-show and keep
-    hidden copies of old bubbles (welcome message, date separators) that would otherwise look new.
+    anchor: the text the user sent or the label they tapped. Its echo is found exactly (labels compared
+    without iOS's trailing '.'), or by prefix only for a bubble on the user's side.
+    - A fresh echo is on screen (more copies than before the action): everything below it is new, also a
+      text seen earlier (a sub-menu with the same title as the main menu). A text seen earlier that sits
+      below everything else is a hidden copy of an old bubble, unless the bot's evidence (confirm) has it.
+    - Otherwise: what is on screen now minus what was there before, and a text already seen earlier in this
+      conversation is never new (chat lists keep hidden copies of old bubbles: welcome, date separators).
     """
     exclude = list(exclude)
     msgs = screen.messages(exclude)
-    old = {norm(t) for t in seen}
-    a = norm(anchor) if anchor else ""
-    if a:
-        hits = [m for m in msgs if norm(m.text) == a or (len(a) > 30 and norm(m.text).startswith(a[:30]))]
+    old = {norm(t) for t in seen} | {norm(t) for t in before}
+    conf = [key(t) for t in confirm]
+    fresh = False
+    if anchor:
+        hits = [m for m in msgs if anchor_match(screen, m, anchor)]
         if hits:
             low = max(hits, key=lambda m: m.y)
-            msgs = [m for m in msgs if m.y > low.y + 1]
-    left = Counter(norm(t) for t in before)
+            a = norm_label(anchor)
+            fresh = len(hits) > sum(1 for t in before if norm_label(t) == a)
+            msgs = [m for m in msgs if m.y > low.y + 1 and m not in hits]
     out: List[Element] = []
+    if fresh:
+        floor = min((x.y for x in exclude if x is not None), default=screen.height or 1e9)
+        tappable = [e.y for e in screen.buttons(exclude) + screen.controls(exclude) + screen.actions(exclude)
+                    if e.center[1] < floor]
+        for i, m in enumerate(msgs):
+            k = norm(m.text)
+            if k in old and not _confirmed(m.text, conf):
+                later = any(norm(x.text) not in old for x in msgs[i + 1:]) or any(y > m.y for y in tappable)
+                if not later:
+                    continue  # a trailing copy of an old bubble
+            if not out or norm(out[-1].text) != k:  # the same bubble reported twice (wrapper + text)
+                out.append(m)
+        return out
+    left = Counter(norm(t) for t in before)
     for m in msgs:
         k = norm(m.text)
-        if k == a or k in old:
+        if k in old and not (anchor and _confirmed(m.text, conf) and left[k] <= 0):
+            if left[k] > 0:
+                left[k] -= 1
             continue
         if left[k] > 0:
             left[k] -= 1
             continue
-        if not out or norm(out[-1].text) != k:  # the same bubble reported twice (wrapper + text)
+        if not out or norm(out[-1].text) != k:
             out.append(m)
     return out
 
 
-def group_options(new: List[Element], buttons: List[Element]) -> List[List[Element]]:
+def group_options(new: List[Element], buttons: List[Element], boxes: Sequence[Element] = ()) -> List[List[Element]]:
     """Selectable rows without checkboxes: texts between the bot's question (first new text) and a disabled
-    button below them (e.g. Continue). Texts on the same line form one row (name + masked number)."""
+    button below them (e.g. Continue). Texts on the same line, or inside the same cell (name above a masked
+    number), form one row."""
     disabled = [b for b in buttons if not b.enabled]
     if len(new) < 2 or not disabled:
         return []
@@ -303,9 +404,15 @@ def group_options(new: List[Element], buttons: List[Element]) -> List[List[Eleme
         return []
     limit = min(below)
     cand = sorted([e for e in new[1:] if e.y + e.h <= limit + 1], key=lambda e: (e.y, e.x))
+    def box_of(e: Element) -> Optional[int]:
+        inside = [b for b in boxes if b.index != e.index and b.contains(e) and not any(b.contains(n) for n in new[:1])]
+        return min(inside, key=lambda b: b.w * b.h).index if inside else None
+
     rows: List[List[Element]] = []
     for e in cand:
-        if rows and e.y < max(x.y + x.h for x in rows[-1]) - 4:
+        box = box_of(e)
+        if rows and ((box is not None and box == box_of(rows[-1][0]))
+                     or e.y < max(x.y + x.h for x in rows[-1]) - 4):
             rows[-1].append(e)
         else:
             rows.append([e])

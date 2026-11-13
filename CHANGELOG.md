@@ -2,6 +2,56 @@
 
 Newest first. After pulling: `python3 install.py` (with your usual flags), then restart both agents.
 
+## Round 5 – requirements R5-1 … R5-11 from the fourth real run
+**After pulling:** run `install.py` (it rebuilds the driver and stops the old one; `status` shows
+`driver.outdated` if an old one still runs, then `stop_driver` + `start_driver`). In `tester/config.json` set
+`waits.app_switch_s` to `6` (or delete the key) and, if the app shows local "please wait" texts,
+`chat.interim_labels`.
+
+**A – reports something that did not happen**
+- **R5-1:** a tap by text skips copies the driver reports as not hittable (new driver command `hittable`;
+  `skipped_hidden_copies: n`). A tap by `[index]` on a hidden copy is refused. After every tap on a
+  button/option, the user's echo bubble is compared with the label: a different one returns
+  `tap_mismatch: {"asked", "sent"}` (journaled) and the next `wait_for_reply` anchors on what was really sent.
+- **R5-2:** the anchor and texts are compared without iOS's trailing "." ("Keep consent." = "Keep consent").
+- **R5-3:** with `reply_evidence` working, on-screen text alone no longer ends the wait: it ends when the
+  endpoint has the new reply and the screen shows it. At the timeout, texts without a bot event come back with
+  `local_only: true`. New optional `chat.interim_labels` (regexes): such texts go to `interim_messages`.
+- **R5-4:** the anchor matches exactly; a 30-character prefix only for a bubble on the user's side.
+
+**B – hides something that did happen**
+- **R5-5:** below the user's new message every bubble counts, also a text seen before (a sub-menu with the
+  main menu's title). A repeated text sitting below everything else counts only if the endpoint confirms
+  it or something tappable follows it; otherwise it is a hidden copy of an old bubble. *Changed test:*
+  `test_round2.test_identical_reply_detected_via_endpoint` now expects the repeat in `new_messages` (it used
+  to get only a `note`) – stricter, not looser.
+- **R5-6:** a reply longer than the screen: when the user's message is not visible and the reply starts at
+  the top, it scrolls up (max 3 swipes), collects the bubbles, scrolls back (`scrolled_up`). Evidence
+  paragraphs (markers like `[QUICK-REPLY …]` dropped) not found on screen → `evidence_texts_missing`.
+- **R5-7:** full-width single-line rows that are not sentences, below the last bubble → `actions` (tappable,
+  not in `new_messages`). If a short final bot message shows up there instead, report it.
+
+**C – planner**
+- **R5-8:** copy one of the guide's example prompts verbatim; block a row only if the guide explicitly needs
+  other data/setup or a forbidden action, else keep it runnable with `precondition: <what>` in Expected;
+  reply "N rows runnable, M blocked" from the new `plans(name).summary`. Worked example in the planner.
+
+**D – the rest**
+- **R5-9:** `waits.app_switch_s` default 6. The watch ends early as soon as the chat changes, so normal taps
+  are not slower. An in-app web page over the chat → `left_app: "in_app_browser"` with a hint to tap
+  Close/Done; `send_message` refuses to type into it.
+- **R5-10:** texts inside the same cell (name above a masked number) form one option.
+- **R5-11:** `find_session_id` no longer says "several candidates" for one; `screen()` lists trailing hidden
+  copies of old bubbles under `hidden_copies` instead of `messages`; in-app alerts, sheets and banners
+  (id containing banner/toast/snackbar/notification) → `app_alerts`. The typing indicator is never a message.
+
+**Test again:**
+- R5-1 and R5-3 first: the old-menu taps near the composer, and a flow with a local "please wait" text (set
+  `chat.interim_labels`);
+- the sub-menu with the main menu's title (R5-5), the long FAQ answer (R5-6), the action card (R5-7);
+- the planner on the same guide section (R5-8): compare runnable/blocked counts;
+- links that open slowly or in-app (R5-9), the card picker (R5-10).
+
 ## Round 4 – requirements R1–R11 from the third real run
 - **R1:** if the endpoint already has the reply but the screen doesn't, `wait_for_reply` waits up to
   `waits.render_grace_s` (default 6 s) for it to appear.

@@ -24,7 +24,9 @@
     "typing_ids": [],
     "typing_labels": [],
     "_ignore_labels": "Regexes for labels that are never chat content, e.g. debug banners: [\"^test message \\\\d+$\"]",
-    "ignore_labels": []
+    "ignore_labels": [],
+    "_interim_labels": "Regexes for texts the app draws locally while the bot works, e.g. [\"^On it!?$\"]. They are never taken as the reply.",
+    "interim_labels": []
   },
   "session": {
     "_comment": "Regexes that find the conversation/session id in the app log and the bot logs (first group = id).",
@@ -56,7 +58,7 @@
     "poll_ms": 600,
     "send_confirm_s": 10,
     "render_grace_s": 6,
-    "app_switch_s": 2.0,
+    "app_switch_s": 6.0,
     "session_find_s": 4
   },
   "endpoints": {
