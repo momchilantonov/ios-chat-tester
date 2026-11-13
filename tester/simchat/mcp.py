@@ -28,12 +28,12 @@ def _tool(name: str, desc: str, props: Optional[Dict[str, Any]] = None, required
 
 TOOLS: List[Dict[str, Any]] = [
     _tool("status", "Check config, booted simulator, UI driver, app state, local service ports and log files; "
-          "also returns the project profile (read it!), the repos you may read and the scenario list. "
+          "also returns the project profile (read it!), the repos you may read and the test plans. "
           "Call first in every session."),
     _tool("start_driver", "Start the UI driver (XCTest) on the booted simulator and bring Simulator.app to the "
           "front. First start builds it (1-3 min): if it returns phase 'starting', call it again.",
           {"wait_s": _s("number", "Seconds to wait for readiness (max 110).", default=50)}),
-    _tool("stop_driver", "Stop the UI driver this tool started. Not needed between scenarios."),
+    _tool("stop_driver", "Stop the UI driver this tool started. Not needed between runs."),
     _tool("open_app", "Bring the app under test to the foreground. fresh=true terminates and relaunches it "
           "(clean conversation) and then taps through app.after_launch from config (e.g. a demo menu entry) to "
           "reach the chat.", {"fresh": _s("boolean", "Relaunch the app.", default=False),
@@ -102,10 +102,18 @@ TOOLS: List[Dict[str, Any]] = [
           "(patterns: session.regex in config). Sets it when exactly one candidate is found."),
     _tool("set_session_id", "Set the conversation/session id to use for fetch() {session_id}.",
           {"id": _s("string", "The session id.")}, ["id"]),
-    _tool("scenarios", "List scenario files, or return one scenario's content by name.",
-          {"name": _s("string", "Scenario file name from the list (optional).")}),
-    _tool("start_run", "Start a test run: creates runs/<time>_<name>/ and journals every action from now on.",
-          {"name": _s("string", "Scenario name.")}, ["name"]),
+    _tool("plans", "List test plans (Markdown tables Flow | User prompt | Expected | Result), or return one plan "
+          "with its numbered rows and conversations.",
+          {"name": _s("string", "Plan file name from the list, or a path to a plan file (optional).")}),
+    _tool("start_run", "Start a test run: creates runs/<time>_<name>/ and journals every action. With plan=..., "
+          "returns the numbered rows to execute; record each with record_result.",
+          {"name": _s("string", "Run name (default: the plan's file name)."),
+           "plan": _s("string", "Plan name or path (optional).")}),
+    _tool("record_result", "Record the result of one plan row: success, fail (note = what happened instead, with "
+          "the quoted bot text) or blocked (note = why it could not be executed).",
+          {"row": _s("integer", "Row number from start_run/plans."),
+           "status": _s("string", "success | fail | blocked", enum=["success", "fail", "blocked"]),
+           "note": _s("string", "Required for fail and blocked.")}, ["row", "status"]),
     _tool("check", "Record one expectation and whether it held, with concrete evidence. A run can only PASS "
           "with at least one check and no failed checks.",
           {"name": _s("string", "What was expected."), "passed": _s("boolean", "Did it hold?"),
@@ -115,12 +123,14 @@ TOOLS: List[Dict[str, Any]] = [
           {"text": _s("string", "The note."),
            "kind": _s("string", "observation | bug", enum=["observation", "bug"], default="observation")},
           ["text"]),
-    _tool("end_run", "Finish the run: writes run.json, transcript.json and log slices. PASS is downgraded "
-          "automatically if checks failed or none were recorded.",
-          {"verdict": _s("string", "PASS | FAIL | BLOCKED | INCONCLUSIVE",
-                         enum=["PASS", "FAIL", "BLOCKED", "INCONCLUSIVE"]),
-           "summary": _s("string", "3-8 sentences.")}, ["verdict", "summary"]),
-    _tool("write_file", "Write a report or scenario. Only under runs/ or scenarios/ (.md .json .txt .yaml).",
+    _tool("end_run", "Finish the run: writes run.json, transcript.json and log slices. With a plan it also writes "
+          "the filled table (results.md, and <plan>.result.md next to the plan; unrecorded rows become "
+          "'blocked: not run') and computes the verdict. Without a plan: give a verdict; PASS is downgraded if "
+          "checks failed or none were recorded.",
+          {"summary": _s("string", "3-8 sentences."),
+           "verdict": _s("string", "Only for runs without a plan: PASS | FAIL | BLOCKED | INCONCLUSIVE",
+                         enum=["PASS", "FAIL", "BLOCKED", "INCONCLUSIVE"])}, ["summary"]),
+    _tool("write_file", "Write a report or a test plan. Only under runs/ or plans/ (.md .json .txt .yaml).",
           {"path": _s("string", "Path relative to the chat-tester folder, or the absolute run_dir path."),
            "content": _s("string", "File content.")}, ["path", "content"]),
 ]

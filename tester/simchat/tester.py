@@ -13,12 +13,13 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .config import HOME
 from .driver import DriverError, DriverManager, Simulator
+from .plan import STATUSES, fill_results, format_result, parse_plan, public_rows
 from .screen import Element, Screen, exact, new_messages, norm
 
 RUNS = HOME / "runs"
-SCENARIOS = HOME / "scenarios"
+PLANS = HOME / "plans"
 PROFILE = HOME / "profile.md"
-WRITABLE = ("runs", "scenarios")
+WRITABLE = ("runs", "plans")
 WRITABLE_EXT = (".md", ".json", ".txt", ".yaml", ".yml")
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
 VERDICTS = ("PASS", "FAIL", "BLOCKED", "INCONCLUSIVE")
@@ -83,6 +84,10 @@ class Run:
         self.transcript: List[Dict[str, Any]] = []
         self.log_offsets: Dict[str, int] = {}
         self.counter = 0
+        self.plan_path: Optional[Path] = None
+        self.plan_text = ""
+        self.rows: List[Dict[str, Any]] = []
+        self.results: Dict[int, Dict[str, str]] = {}
 
     def journal(self, entry: Dict[str, Any]) -> None:
         entry = dict(entry, ts=datetime.now().isoformat(timespec="milliseconds"))
@@ -183,7 +188,7 @@ class Tester:
         out["run"] = str(self.run.dir) if self.run else None
         out["repos"] = {role: {"path": p, "exists": Path(p).expanduser().is_dir()}
                         for role, p in (self.cfg.get("repos") or {}).items()}
-        out["scenarios"] = self._scenario_names()
+        out["plans"] = self._plan_names()
         try:
             out["profile"] = PROFILE.read_text(encoding="utf-8")[:8000]
         except OSError:
@@ -735,31 +740,93 @@ class Tester:
         self._journal({"action": "set_session_id", "id": id})
         return {"session_id": id, "next": "fetch(endpoint) now fills {session_id} automatically"}
 
-    # ---------------------------------------------------------------- scenarios
+    # ---------------------------------------------------------------- plans
     @staticmethod
-    def _scenario_names() -> List[str]:
-        if not SCENARIOS.is_dir():
+    def _plan_names() -> List[str]:
+        if not PLANS.is_dir():
             return []
-        return sorted(str(p.relative_to(SCENARIOS)) for p in SCENARIOS.rglob("*")
-                      if p.is_file() and p.suffix.lower() in WRITABLE_EXT)
+        return sorted(str(p.relative_to(PLANS)) for p in PLANS.rglob("*.md")
+                      if p.is_file() and not p.name.endswith(".result.md") and p.name != "README.md")
 
-    def scenarios(self, name: str = "") -> Dict[str, Any]:
+    def _plan_file(self, name: str) -> Path:
+        cand = Path(name).expanduser()
+        if not cand.is_absolute():
+            cand = PLANS / name
+            if not cand.exists() and not name.endswith(".md"):
+                cand = PLANS / (name + ".md")
+        cand = cand.resolve()
+        if not cand.is_file():
+            raise ToolError("no plan %r" % name, plans=self._plan_names())
+        return cand
+
+    def plans(self, name: str = "") -> Dict[str, Any]:
+        """List test plans, or return one plan with its parsed rows."""
         if not name:
-            return {"folder": str(SCENARIOS), "scenarios": self._scenario_names()}
-        path = (SCENARIOS / name).resolve()
-        if SCENARIOS.resolve() not in path.parents or not path.is_file():
-            raise ToolError("no scenario %r" % name, scenarios=self._scenario_names())
-        return {"name": name, "path": str(path), "content": path.read_text(encoding="utf-8")}
+            return {"folder": str(PLANS), "plans": self._plan_names()}
+        path = self._plan_file(name)
+        text = path.read_text(encoding="utf-8")
+        plan = parse_plan(text)
+        out = {"path": str(path), "title": plan["title"], "conversations": plan["sections"],
+               "rows": public_rows(plan), "content": text}
+        if not plan["rows"]:
+            out["warning"] = "no table with the columns Flow | User prompt | Expected | Result found"
+        return out
 
-    # ---------------------------------------------------------------- runs
-    def start_run(self, name: str) -> Dict[str, Any]:
+    def start_run(self, name: str = "", plan: str = "") -> Dict[str, Any]:
         if self.run:
-            self.end_run("INCONCLUSIVE", "Superseded by a new run before it was ended.")
+            self.end_run("Superseded by a new run before it was ended.", "INCONCLUSIVE")
+        path = self._plan_file(plan) if plan else None
+        text = path.read_text(encoding="utf-8") if path else ""
+        parsed = parse_plan(text) if path else {"rows": [], "sections": [], "title": ""}
+        if path and not parsed["rows"]:
+            raise ToolError("plan has no table with the columns Flow | User prompt | Expected | Result",
+                            path=str(path))
+        name = name or (path.stem if path else "run")
         self.run = Run(name, self.runs_dir, self.clock())
+        self.run.plan_path, self.run.plan_text, self.run.rows = path, text, parsed["rows"]
         self.run.log_offsets = self._log_sizes()
         self._turn_offsets = dict(self.run.log_offsets)
-        self.run.journal({"action": "start_run", "name": name})
-        return {"run_dir": str(self.run.dir)}
+        self.run.journal({"action": "start_run", "name": name, "plan": str(path) if path else None})
+        out: Dict[str, Any] = {"run_dir": str(self.run.dir)}
+        if path:
+            out.update({"plan": str(path), "conversations": parsed["sections"], "rows": public_rows(parsed),
+                        "next": "for each conversation: open_app(fresh=true); for each row: act, wait_for_reply, "
+                                "record_result(row, status, note)"})
+        return out
+
+    def record_result(self, row: int, status: str, note: str = "") -> Dict[str, Any]:
+        """Result of one plan row: success, fail (note = what happened instead) or blocked (note = why)."""
+        run = self._need_run()
+        if not run.rows:
+            raise ToolError("this run has no plan - use check() instead, or start_run(plan=...)")
+        numbers = [r["row"] for r in run.rows]
+        if int(row) not in numbers:
+            raise ToolError("row %s is not in the plan (rows 1-%d)" % (row, len(numbers)))
+        try:
+            cell = format_result(status, note)
+        except ValueError as exc:
+            raise ToolError(str(exc))
+        status = status.lower().strip()
+        r = run.rows[int(row) - 1]
+        run.results[int(row)] = {"status": status, "note": note, "cell": cell}
+        if status != "blocked":
+            run.checks.append({"name": "row %s: %s" % (row, r["prompt"][:80]), "passed": status == "success",
+                               "evidence": note or "success"})
+        run.journal({"action": "record_result", "row": int(row), "status": status, "note": note})
+        left = [n for n in numbers if n not in run.results]
+        return {"row": int(row), "result": cell, "rows_left": left[:20], "rows_left_count": len(left)}
+
+    def _plan_verdict(self, run: Run) -> Dict[str, Any]:
+        statuses = [run.results.get(r["row"], {}).get("status", "blocked") for r in run.rows]
+        counts = {s: statuses.count(s) for s in STATUSES}
+        if counts["fail"]:
+            verdict = "FAIL"
+        elif counts["blocked"]:
+            verdict = "BLOCKED"
+        else:
+            verdict = "PASS"
+        return {"verdict": verdict, "counts": counts,
+                "not_run": [r["row"] for r in run.rows if r["row"] not in run.results]}
 
     def _need_run(self) -> Run:
         if not self.run:
@@ -782,9 +849,23 @@ class Tester:
         run.journal(dict(item, action="note"))
         return {"recorded": item}
 
-    def end_run(self, verdict: str, summary: str) -> Dict[str, Any]:
+    def end_run(self, summary: str, verdict: str = "") -> Dict[str, Any]:
         run = self._need_run()
-        verdict = verdict.upper().strip()
+        plan_out: Dict[str, Any] = {}
+        if run.rows:
+            pv = self._plan_verdict(run)
+            verdict = pv["verdict"]
+            cells = {n: v["cell"] for n, v in run.results.items()}
+            for n in pv["not_run"]:
+                cells[n] = "blocked: not run"
+            filled = fill_results(run.plan_text, cells)
+            (run.dir / "results.md").write_text(filled, encoding="utf-8")
+            plan_out = {"counts": pv["counts"], "not_run": pv["not_run"], "results": str(run.dir / "results.md")}
+            if run.plan_path and PLANS.resolve() in run.plan_path.parents:
+                beside = run.plan_path.with_name(run.plan_path.stem + ".result.md")
+                beside.write_text(filled, encoding="utf-8")
+                plan_out["results_beside_plan"] = str(beside)
+        verdict = (verdict or "").upper().strip()
         if verdict not in VERDICTS:
             raise ToolError("verdict must be one of %s" % ", ".join(VERDICTS))
         failed = [c for c in run.checks if not c["passed"]]
@@ -796,6 +877,7 @@ class Tester:
         result = {"name": run.name, "verdict": final, "requested_verdict": verdict, "verdict_reason": reason,
                   "summary": summary, "checks": run.checks, "notes": run.notes,
                   "duration_s": round(self.clock() - run.started, 1)}
+        result.update(plan_out)
         (run.dir / "run.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         (run.dir / "transcript.json").write_text(json.dumps(run.transcript, ensure_ascii=False, indent=2),
                                                  encoding="utf-8")
@@ -807,8 +889,10 @@ class Tester:
                 pass
         run.journal({"action": "end_run", "verdict": final})
         self.run = None
-        return {"run_dir": str(run.dir), "verdict": final, "verdict_reason": reason,
-                "next": "write report.md into run_dir with write_file"}
+        out = {"run_dir": str(run.dir), "verdict": final, "verdict_reason": reason,
+               "next": "write report.md into run_dir with write_file"}
+        out.update(plan_out)
+        return out
 
     def write_file(self, path: str, content: str) -> Dict[str, Any]:
         target = (HOME / path).resolve() if not Path(path).is_absolute() else Path(path).resolve()

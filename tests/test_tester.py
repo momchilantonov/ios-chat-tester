@@ -17,7 +17,7 @@ class TesterTest(unittest.TestCase):
         self.assertEqual(st["driver"]["phase"], "ready")
         self.assertEqual(st["simulator"]["udid"], "SIM-1")
         self.assertEqual(st["app_state"], "foreground")
-        self.assertIn("scenarios", st)
+        self.assertIn("plans", st)
 
     def test_welcome_then_send_and_reply_with_buttons(self):
         self.t.open_app(fresh=True)
@@ -152,7 +152,7 @@ class TesterTest(unittest.TestCase):
         self.t.wait_for_reply()
         self.t.check("bot greets", True, "Hi! I can help with cards and payments.")
         self.t.check("offers loans", False, "no loans button")
-        end = self.t.end_run("PASS", "summary")
+        end = self.t.end_run("summary", verdict="PASS")
         self.assertEqual(end["verdict"], "FAIL")
         from pathlib import Path
         run_dir = Path(st["run_dir"])
@@ -161,9 +161,9 @@ class TesterTest(unittest.TestCase):
         transcript = json.loads((run_dir / "transcript.json").read_text())
         self.assertEqual(transcript[0], {"from": "user", "text": "Hello"})
         self.t.start_run("empty")
-        self.assertEqual(self.t.end_run("PASS", "nothing")["verdict"], "INCONCLUSIVE")
+        self.assertEqual(self.t.end_run("nothing", verdict="PASS")["verdict"], "INCONCLUSIVE")
         self.t.start_run("blocked")
-        self.assertEqual(self.t.end_run("BLOCKED", "bot down")["verdict"], "BLOCKED")
+        self.assertEqual(self.t.end_run("bot down", verdict="BLOCKED")["verdict"], "BLOCKED")
 
     def test_check_needs_evidence_and_run(self):
         with self.assertRaises(Exception):

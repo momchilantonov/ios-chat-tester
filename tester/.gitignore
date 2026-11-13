@@ -4,5 +4,8 @@ bin/
 .install.json
 runs/*
 !runs/.gitkeep
+plans/*
+!plans/README.md
+!plans/example-plan.md
 driver/.build/
 __pycache__/

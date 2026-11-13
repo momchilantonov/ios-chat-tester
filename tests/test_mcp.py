@@ -59,7 +59,7 @@ class McpTest(unittest.TestCase):
         self.rpc("notifications/initialized", notify=True)
         tools = self.rpc("tools/list")["result"]["tools"]
         names = {t["name"] for t in tools}
-        self.assertTrue({"status", "send_message", "wait_for_reply", "tap", "end_run", "scenarios"} <= names)
+        self.assertTrue({"status", "send_message", "wait_for_reply", "tap", "end_run", "plans", "record_result"} <= names)
         for t in tools:
             self.assertEqual(t["inputSchema"]["type"], "object")
         err, res = self.call("send_message", text="Здравей")

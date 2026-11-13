@@ -9,7 +9,7 @@
 What it does:
   1. checks prerequisites (Python 3.9+, Xcode, simctl, Copilot CLI)
   2. creates tester/config.json and tester/profile.md from the examples (once; flags update config.json)
-  3. installs the agent + skills for Copilot CLI (~/.copilot/agents, ~/.copilot/skills) and registers the
+  3. installs the tester agent, the planner agent (<name>-planner) and their skills for Copilot CLI (~/.copilot/agents, ~/.copilot/skills) and registers the
      "simchat" MCP server for Copilot CLI (~/.copilot/mcp-config.json) and VS Code (user mcp.json);
      writes the launcher tester/bin/<name>
      (or, with --into REPO, into REPO/.github/{agents,skills,mcp.json} and REPO/.vscode/mcp.json)
@@ -36,7 +36,8 @@ TEMPLATES = ROOT / "templates"
 SERVER = TESTER / "simchat_server.py"
 MANIFEST = TESTER / ".install.json"
 MCP_NAME = "simchat"
-SKILLS = ("chat-testing", "chat-test-report")
+SKILLS = ("chat-testing", "chat-test-report", "test-plan-format")
+AGENTS = (("agent.md", "{name}"), ("planner.md", "{name}-planner"))  # template -> agent name
 VSCODE_USER = Path("~/Library/Application Support/Code/User").expanduser()
 RUNNER_ID = "dev.simchat.SimDriverUITests.xctrunner"  # the test-runner app Xcode installs on the simulator
 
@@ -246,8 +247,9 @@ class Installer:
     def render(self, text):
         repos = (getattr(self, "cfg", {}) or {}).get("repos") or {}
         lines = ["- %s: `%s`" % (role, path) for role, path in repos.items()]
-        lines.append("- tester (scenarios, runs, profile): `%s`" % TESTER)
+        lines.append("- tester (plans, runs, profile): `%s`" % TESTER)
         return (text.replace("{{AGENT_NAME}}", self.a.name)
+                    .replace("{{PLANNER_NAME}}", self.a.name + "-planner")
                     .replace("{{TESTER_DIR}}", str(TESTER))
                     .replace("{{REPOS}}", "\n".join(lines)))
 
@@ -255,12 +257,14 @@ class Installer:
         python = self.python
         cli_entry = {"type": "local", "command": python, "args": [str(SERVER)], "env": {}, "tools": ["*"]}
         code_entry = {"type": "stdio", "command": python, "args": [str(SERVER)]}
-        agent = self.render((TEMPLATES / "agent.md").read_text(encoding="utf-8"))
+        agents = [(tpl_name.format(name=self.a.name), self.render((TEMPLATES / tpl).read_text(encoding="utf-8")))
+                  for tpl, tpl_name in AGENTS]
         if self.a.into:
             repo = Path(self.a.into).expanduser().resolve()
             self.header("[3/4] agent, skills and MCP registration into %s" % repo)
             base = repo / ".github"
-            self.write(base / "agents" / ("%s.agent.md" % self.a.name), agent)
+            for agent_name, agent in agents:
+                self.write(base / "agents" / ("%s.agent.md" % agent_name), agent)
             for skill in SKILLS:
                 self.write(base / "skills" / skill / "SKILL.md",
                            self.render((TEMPLATES / "skills" / skill / "SKILL.md").read_text(encoding="utf-8")))
@@ -269,7 +273,8 @@ class Installer:
         else:
             home = Path(self.a.copilot_home).expanduser()
             self.header("[3/4] agent, skills and MCP registration (user level: %s)" % home)
-            self.write(home / "agents" / ("%s.agent.md" % self.a.name), agent)
+            for agent_name, agent in agents:
+                self.write(home / "agents" / ("%s.agent.md" % agent_name), agent)
             for skill in SKILLS:
                 self.write(home / "skills" / skill / "SKILL.md",
                            self.render((TEMPLATES / "skills" / skill / "SKILL.md").read_text(encoding="utf-8")))
@@ -283,10 +288,11 @@ class Installer:
                 self.say("  skip     VS Code user folder %s not found (use --vscode-dir)" % vscode)
         dirs = [str(TESTER)] + [p for _, p in sorted((self.cfg.get("repos") or {}).items())]
         add = " ".join("--add-dir=%s" % _sh(d) for d in dirs)
-        launcher = ("#!/bin/bash\n# Start the %s agent in Copilot CLI with read access to the tester and repos.\n"
-                    "# Run it from the folder you want as the working directory (e.g. the bot repo).\n"
-                    "exec copilot --agent=%s %s \"$@\"\n" % (self.a.name, self.a.name, add))
-        self.write(TESTER / "bin" / self.a.name, launcher, mode=0o755)
+        for agent_name, _ in agents:
+            launcher = ("#!/bin/bash\n# Start the %s agent in Copilot CLI with read access to the tester and repos.\n"
+                        "# Run it from the folder you want as the working directory (e.g. the bot repo).\n"
+                        "exec copilot --agent=%s %s \"$@\"\n" % (agent_name, agent_name, add))
+            self.write(TESTER / "bin" / agent_name, launcher, mode=0o755)
 
     def build_driver(self):
         self.header("[4/4] UI driver build")
@@ -391,7 +397,8 @@ class Installer:
             self.local_config)
         target = (Path(self.a.into) / ".github") if self.a.into else Path(self.a.copilot_home).expanduser()
         self._step(3, "agent, skills and tool registration", [
-            "Writes the agent '%s' and 2 skills into %s," % (self.a.name, target),
+            "Writes the agents '%s' and '%s-planner' and %d skills into %s,"
+            % (self.a.name, self.a.name, len(SKILLS), target),
             "registers the 'simchat' tool for Copilot CLI and VS Code (other entries are kept),",
             "and writes the launcher tester/bin/%s." % self.a.name], self.agent_files)
         self._step(4, "build the UI driver", [
@@ -413,8 +420,11 @@ class Installer:
                  "  1. fill in %s/profile.md and check %s/config.json\n"
                  "  2. run your app in the simulator (Xcode), start the local stack\n"
                  "  3. smoke test:  %s %s demo \"Hello\"\n"
-                 "  4. Copilot CLI: %s/bin/%s     VS Code: Copilot Chat -> agent picker -> %s"
-                 % (TESTER, TESTER, _sh(self.python), SERVER, TESTER, self.a.name, self.a.name))
+                 "  4. write a plan:  %s/bin/%s-planner   ->  \"Make a test plan for flow ...\"\n"
+                 "  5. run it:        %s/bin/%s           ->  \"Run plan ...\"\n"
+                 "     (VS Code: Copilot Chat -> agent picker -> %s-planner / %s)"
+                 % (TESTER, TESTER, _sh(self.python), SERVER, TESTER, self.a.name, TESTER, self.a.name,
+                    self.a.name, self.a.name))
         return 1 if self.problems else 0
 
     def uninstall(self):
@@ -484,7 +494,7 @@ class Installer:
         if not self.dry and MANIFEST.exists():
             MANIFEST.unlink()
         if not self.dry:
-            self.say("done. Left in place: this folder with your config.json, profile.md, scenarios/, runs/ and")
+            self.say("done. Left in place: this folder with your config.json, profile.md, plans/, runs/ and")
             self.say("the driver build. To delete all of it:  rm -rf %s" % _sh(ROOT))
             self.say("(simulators that were not booted may still have the runner app: "
                      "xcrun simctl uninstall <udid> %s)" % RUNNER_ID)

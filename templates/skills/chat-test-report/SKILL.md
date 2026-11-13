@@ -5,8 +5,11 @@ description: How to finish a chat test run - choosing the verdict, the end_run s
 
 # Finishing a run
 
-1. `end_run(verdict, summary)` - writes `run.json`, `transcript.json`, `journal.jsonl` and log slices into the
-   run folder. PASS is downgraded automatically: failed checks -> FAIL, no checks -> INCONCLUSIVE.
+1. `end_run(summary)` - writes `run.json`, `transcript.json`, `journal.jsonl` and log slices into the run
+   folder. **With a plan** it also writes the filled table (`<plan>.result.md` next to the plan, and
+   `results.md` in the run folder) and computes the verdict: any fail -> FAIL, else any blocked -> BLOCKED,
+   else PASS. **Without a plan** pass a verdict; PASS is downgraded automatically (failed checks -> FAIL,
+   no checks -> INCONCLUSIVE).
 2. `write_file("<run_dir>/report.md", ...)` with the structure below.
 
 ## Verdicts
