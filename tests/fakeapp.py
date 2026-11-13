@@ -36,6 +36,10 @@ class FakeApp:
         self.typing_until = 0.0
         self.pending = None
         self.state = "foreground"
+        self.carousel = []           # items of a horizontal carousel, one visible at a time
+        self.carousel_pos = 0
+        self.menu = False            # long-press context menu
+        self.swipes = []
         if self.welcome:
             self.messages.append(("bot", "Welcome! How can I help?"))
 
@@ -66,6 +70,8 @@ class FakeApp:
         rows = []
         for who, text in self.messages:
             rows.append(("msg", who, text))
+        if self.carousel:
+            rows.append(("carousel", None, None))
         for label, _ in self.buttons:
             rows.append(("btn", label, None))
         if self.pending:
@@ -87,8 +93,14 @@ class FakeApp:
                 els.append({"type": "button", "label": row[1], "id": "qr." + row[1].lower(), "value": "",
                             "x": 10, "y": ry, "w": 200, "h": 44})
                 els.append({"type": "text", "label": row[1], "id": "", "value": "", "x": 20, "y": ry + 10, "w": 150, "h": 24})
+            elif kind == "carousel":
+                els.append({"type": "collectionView", "label": "", "id": "", "value": "", "x": 0, "y": ry, "w": W, "h": 55})
+                els.append({"type": "text", "label": self.carousel[self.carousel_pos], "id": "", "value": "",
+                            "x": 40, "y": ry + 10, "w": 300, "h": 30})
             else:
                 els.append({"type": "other", "label": "typing", "id": "typing", "value": "", "x": 10, "y": ry, "w": 60, "h": 30})
+        if self.menu:
+            els.append({"type": "button", "label": "Copy", "id": "", "value": "", "x": 150, "y": 400, "w": 90, "h": 40})
         els.append(dict(COMPOSER, type="textView", label="", id="", value=self.value, placeholder="Message"))
         if self.send_label:
             els.append(dict(SEND, type="button", label=self.send_label, id="", value=""))
@@ -152,6 +164,17 @@ class FakeApp:
                 self.value = self.value[:-n] if n < len(self.value) else ""
                 return {}
             if cmd == "swipe":
+                x1, y1, x2, y2 = (float(args[k]) for k in ("x1", "y1", "x2", "y2"))
+                self.swipes.append(args)
+                for e in self.elements():
+                    if e["type"] == "collectionView" and self._hit(e, x1, y1) and abs(x2 - x1) > abs(y2 - y1):
+                        step = 1 if x2 < x1 else -1  # finger left -> next item
+                        self.carousel_pos = max(0, min(len(self.carousel) - 1, self.carousel_pos + step))
+                return {}
+            if cmd == "long_press":
+                x, y = float(args["x"]), float(args["y"])
+                if any(e["type"] == "other" and self._hit(e, x, y) for e in self.elements()):
+                    self.menu = True
                 return {}
             if cmd == "stop":
                 return {}

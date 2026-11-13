@@ -12,7 +12,7 @@ You can watch everything happen in the Simulator window.
 ```
 Copilot CLI / VS Code ── agent "<name>" + skills chat-testing, chat-test-report
         │ MCP (stdio)
-tester/simchat_server.py ── send_message · wait_for_reply · tap · screen · fetch · read_log · runs/reports
+tester/simchat_server.py ── send_message · wait_for_reply · tap · swipe · long_press · scroll · screen · fetch · read_log · runs
         │ JSON over 127.0.0.1                      │ GET 127.0.0.1 / read log files
 tester/driver (XCTest UI test, runs forever) ──▶  your app in the booted Simulator ──▶ your local bot/backend
 ```

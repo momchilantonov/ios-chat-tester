@@ -96,6 +96,50 @@ class TesterTest(unittest.TestCase):
         self.assertFalse(rep["replied"])
         self.assertTrue(rep["timed_out"])
 
+    def _carousel_index(self):
+        scr = self.t.screen()
+        line = next(l for l in scr["elements"] if " collectionView " in l)
+        return int(line.split("]")[0][1:])
+
+    def test_swipe_carousel_left_and_right(self):
+        self.s.app.carousel = ["Debit card *1111", "Credit card *2222", "Debit card *3333"]
+        idx = self._carousel_index()
+        res = self.t.swipe("left", element=idx)
+        self.assertTrue(res["changed"])
+        self.assertEqual(res["now_visible"], ["Credit card *2222"])
+        self.assertEqual(res["no_longer_visible"], ["Debit card *1111"])
+        sw = self.s.app.swipes[-1]
+        self.assertGreater(sw["x1"], sw["x2"])               # finger moved left
+        self.assertEqual(sw["y1"], sw["y2"])
+        self.assertEqual(sw["speed"], "normal")
+        res = self.t.swipe("right", element=self._carousel_index(), speed="fast")
+        self.assertEqual(res["now_visible"], ["Debit card *1111"])
+        self.assertEqual(self.s.app.swipes[-1]["speed"], "fast")
+
+    def test_swipe_by_text_and_screen_centre_and_bad_input(self):
+        self.s.app.carousel = ["A card", "B card"]
+        self.t.screen()
+        self.assertEqual(self.t.swipe("left", text="A card")["now_visible"], ["B card"])
+        res = self.t.swipe("up")
+        self.assertEqual(res["on"], "screen centre")
+        sw = self.s.app.swipes[-1]
+        self.assertGreater(sw["y1"], sw["y2"])                # finger moved up
+        for v in (sw["x1"], sw["x2"], sw["y1"], sw["y2"]):
+            self.assertTrue(2 <= v <= 842)
+        with self.assertRaises(Exception):
+            self.t.swipe("sideways")
+        with self.assertRaises(Exception):
+            self.t.swipe("left", speed="warp")
+
+    def test_long_press_opens_menu(self):
+        self.t.screen()
+        res = self.t.long_press(text="Welcome! How can I help?", duration=0.8)
+        self.assertIn("Copy", res["now_visible"])
+        last = [c for c in self.s.app.commands if c[0] == "long_press"][-1][1]
+        self.assertEqual(last["duration"], 0.8)
+        with self.assertRaises(Exception):
+            self.t.long_press()
+
     def test_screen_listing(self):
         scr = self.t.screen()
         self.assertIn("Welcome! How can I help?", scr["messages"])

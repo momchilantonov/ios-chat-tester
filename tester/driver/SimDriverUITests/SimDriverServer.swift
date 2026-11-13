@@ -131,7 +131,16 @@ final class CommandHandler {
             guard let a = point(args, "x1", "y1"), let b = point(args, "x2", "y2") else {
                 return fail("swipe needs x1, y1, x2, y2")
             }
-            coordinate(a).press(forDuration: 0.05, thenDragTo: coordinate(b))
+            switch args["speed"] as? String ?? "normal" {
+            case "fast":
+                coordinate(a).press(forDuration: 0.05, thenDragTo: coordinate(b),
+                                    withVelocity: .fast, thenHoldForDuration: 0)
+            case "slow":
+                coordinate(a).press(forDuration: 0.05, thenDragTo: coordinate(b),
+                                    withVelocity: .slow, thenHoldForDuration: 0)
+            default:
+                coordinate(a).press(forDuration: 0.05, thenDragTo: coordinate(b))
+            }
             result = [:]
         case "alerts":
             result = ["alerts": alerts()]
@@ -231,8 +240,10 @@ final class CommandHandler {
         return list
     }
 
+    // Reported even without a label: things to tap/type into, and scroll containers to swipe (carousels).
     private let interactiveTypes: Set<XCUIElement.ElementType> = [
         .button, .textField, .secureTextField, .textView, .searchField, .link, .cell, .`switch`,
+        .slider, .scrollView, .collectionView, .table,
     ]
 
     private func typeName(_ t: XCUIElement.ElementType) -> String {
@@ -247,6 +258,7 @@ final class CommandHandler {
         case .cell: return "cell"
         case .link: return "link"
         case .`switch`: return "switch"
+        case .slider: return "slider"
         case .alert: return "alert"
         case .navigationBar: return "navigationBar"
         case .tabBar: return "tabBar"

@@ -267,25 +267,8 @@ class Tester:
             return {"tapped": "system alert button %r" % alert_button}
         before = self._foreground()
         comp = before.composer(self.chat)
-        target: Optional[Element] = None
-        if element is not None:
-            if self.shown is None:
-                raise ToolError("no screen listing yet - call screen() first")
-            old = next((e for e in self._listed() if e.index == int(element)), None)
-            if old is None:
-                raise ToolError("element [%s] not in the last screen listing" % element)
-            target = before.locate(old)
-            if target is None:
-                raise ToolError("element [%s] %r is no longer on screen - call screen() again" % (element, old.text))
-        elif text or id:
-            hits = before.find(text=text, ident=id)
-            if not hits:
-                raise ToolError("nothing on screen matches %r" % (text or id),
-                                buttons=[b.label for b in before.buttons([comp])])
-            target = hits[0]
+        target = self._target(before, element, text, id)
         if target is not None:
-            if not before.on_screen(target):
-                raise ToolError("element is off screen - scroll first", element=target.describe())
             if not target.enabled:
                 raise ToolError("element is disabled", element=target.describe())
             px, py = target.center
@@ -305,6 +288,98 @@ class Tester:
                 self.run.transcript.append({"from": "user", "tap": target.label or target.id})
         self._journal(entry)
         return {"tapped": what, "next": "call wait_for_reply if this should make the bot answer"}
+
+    def _target(self, before: Screen, element: Optional[int], text: str, ident: str) -> Optional[Element]:
+        """Resolve element [index] (from the listing the agent saw), visible text or accessibility id."""
+        target: Optional[Element] = None
+        if element is not None:
+            if self.shown is None:
+                raise ToolError("no screen listing yet - call screen() first")
+            old = next((e for e in self._listed() if e.index == int(element)), None)
+            if old is None:
+                raise ToolError("element [%s] not in the last screen listing" % element)
+            target = before.locate(old)
+            if target is None:
+                raise ToolError("element [%s] %r is no longer on screen - call screen() again"
+                                % (element, old.text or old.type))
+        elif text or ident:
+            hits = before.find(text=text, ident=ident)
+            if not hits:
+                comp = before.composer(self.chat)
+                raise ToolError("nothing on screen matches %r" % (text or ident),
+                                buttons=[b.label for b in before.buttons([comp])])
+            target = hits[0]
+        if target is not None and not before.on_screen(target):
+            raise ToolError("element is off screen - scroll first", element=target.describe())
+        return target
+
+    def swipe(self, direction: str, element: Optional[int] = None, text: str = "", id: str = "",  # noqa: A002
+              x: Optional[float] = None, y: Optional[float] = None, distance: float = 0.6,
+              speed: str = "normal") -> Dict[str, Any]:
+        """Swipe with one finger. direction = where the finger moves: 'left' on a carousel shows the next item."""
+        direction = (direction or "").lower()
+        if direction not in ("left", "right", "up", "down"):
+            raise ToolError("direction must be left, right, up or down")
+        if speed not in ("slow", "normal", "fast"):
+            raise ToolError("speed must be slow, normal or fast")
+        before = self._foreground()
+        w, h = before.width or 390.0, before.height or 844.0
+        target = self._target(before, element, text, id)
+        if target is not None:
+            cx, cy = target.center
+            span_w, span_h = max(target.w, 120.0), max(target.h, 120.0)
+            what = target.describe()
+        elif x is not None and y is not None:
+            cx, cy, span_w, span_h = float(x), float(y), w, h
+            what = "point (%s, %s)" % (x, y)
+        else:
+            cx, cy, span_w, span_h = w / 2, h / 2, w, h
+            what = "screen centre"
+        frac = max(0.1, min(float(distance), 0.95))
+        half = (span_w if direction in ("left", "right") else span_h) * frac / 2
+        dx = {"left": -1, "right": 1}.get(direction, 0)
+        dy = {"up": -1, "down": 1}.get(direction, 0)
+
+        def clamp(v: float, hi: float) -> float:
+            return round(max(2.0, min(v, hi - 2.0)), 1)
+
+        x1, y1 = clamp(cx - dx * half, w), clamp(cy - dy * half, h)
+        x2, y2 = clamp(cx + dx * half, w), clamp(cy + dy * half, h)
+        seen = {(e.type, e.text) for e in before.visible() if e.text}
+        self._pace()
+        self._call("swipe", x1=x1, y1=y1, x2=x2, y2=y2, speed=speed)
+        self.sleep(0.6)  # let paging/scroll animations settle
+        after = self._snapshot()
+        appeared = [e.text for e in after.visible() if e.text and (e.type, e.text) not in seen]
+        gone = sorted({t for (_, t) in seen} - {e.text for e in after.visible() if e.text})
+        self._journal({"action": "swipe", "direction": direction, "on": what,
+                       "from": [x1, y1], "to": [x2, y2], "speed": speed})
+        return {"swiped": direction, "on": what, "from": [x1, y1], "to": [x2, y2],
+                "now_visible": appeared[:40], "no_longer_visible": gone[:40],
+                "changed": bool(appeared or gone),
+                "next": "call screen() to get fresh [index] numbers before tapping"}
+
+    def long_press(self, element: Optional[int] = None, text: str = "", id: str = "",  # noqa: A002
+                   x: Optional[float] = None, y: Optional[float] = None, duration: float = 1.0) -> Dict[str, Any]:
+        before = self._foreground()
+        target = self._target(before, element, text, id)
+        if target is not None:
+            px, py = target.center
+            what = target.describe()
+        elif x is not None and y is not None:
+            px, py, what = float(x), float(y), "point (%s, %s)" % (x, y)
+        else:
+            raise ToolError("long_press needs element, text, id or x+y")
+        seconds = max(0.3, min(float(duration), 5.0))
+        self._pace()
+        self._call("long_press", x=px, y=py, duration=seconds)
+        self.sleep(0.4)
+        after = self._snapshot()
+        seen = {(e.type, e.text) for e in before.visible() if e.text}
+        appeared = [e.text for e in after.visible() if e.text and (e.type, e.text) not in seen]
+        self._journal({"action": "long_press", "on": what, "x": px, "y": py, "duration": seconds})
+        return {"long_pressed": what, "now_visible": appeared[:40],
+                "next": "call screen() to see a menu that may have opened"}
 
     def _listed(self) -> List[Element]:
         return self.shown.elements if self.shown else []

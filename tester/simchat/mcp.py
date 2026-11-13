@@ -55,7 +55,23 @@ TOOLS: List[Dict[str, Any]] = [
           "forms; use send_message for chat messages.",
           {"text": _s("string", "Text to type."), "element": _s("integer", "Field [index] (optional).")},
           ["text"]),
-    _tool("scroll", "Scroll the screen. 'up' shows earlier content, 'down' later content.",
+    _tool("swipe", "Swipe with one finger. direction is where the FINGER moves: on a carousel 'left' shows the "
+          "next item, 'right' the previous one. Target an element (e.g. the carousel/collectionView [index] from "
+          "screen()), visible text, an accessibility id or a point; default is the screen centre. Returns what "
+          "appeared/disappeared. Indexes change afterwards - call screen() before tapping.",
+          {"direction": _s("string", "left | right | up | down", enum=["left", "right", "up", "down"]),
+           "element": _s("integer", "Index from the last listing."), "text": _s("string", "Visible text."),
+           "id": _s("string", "Accessibility identifier."), "x": _s("number", "X in points."),
+           "y": _s("number", "Y in points."),
+           "distance": _s("number", "Fraction of the element (or screen) to travel, 0.1-0.95.", default=0.6),
+           "speed": _s("string", "slow | normal | fast (fast flicks, slow drags precisely)",
+                       enum=["slow", "normal", "fast"], default="normal")}, ["direction"]),
+    _tool("long_press", "Press and hold on an element, text, id or point (e.g. to open a context menu).",
+          {"element": _s("integer", "Index from the last listing."), "text": _s("string", "Visible text."),
+           "id": _s("string", "Accessibility identifier."), "x": _s("number", "X in points."),
+           "y": _s("number", "Y in points."), "duration": _s("number", "Seconds 0.3-5.", default=1.0)}),
+    _tool("scroll", "Scroll the conversation/screen vertically. 'up' shows earlier content, 'down' later content "
+          "(for sideways or element swipes use swipe).",
           {"direction": _s("string", "up or down", enum=["up", "down"]),
            "amount": _s("number", "Fraction of the screen 0.1-0.8.", default=0.5)}),
     _tool("screenshot", "Save a screenshot into the run folder and show it.",

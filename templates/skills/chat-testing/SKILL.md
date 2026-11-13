@@ -23,6 +23,17 @@ wait_for_reply()
 - Element indexes change with every screen. Use indexes from the **latest** `wait_for_reply`/`screen`.
 - Long replies may scroll. If the reply looks cut off, `screen()`; `scroll("up")` to read earlier parts.
 
+## Swiping, carousels, long press
+- **Carousels** (cards, accounts, offers shown side by side): `screen()` lists the container as
+  `[n] collectionView ... 390x120`. `swipe("left", element=n)` shows the next item, `swipe("right", element=n)`
+  the previous one - direction is where the finger moves. The result lists `now_visible` texts; check each
+  item you need. Stop when `changed` is false (end of the carousel).
+- You can also swipe on visible text (`swipe("left", text="Debit card")`), a point, or the screen centre.
+  `speed="fast"` flicks (paging), `speed="slow"` drags precisely (sliders). `distance` 0.1-0.95.
+- **Long press** (`long_press(element=n)`) opens context menus, e.g. copy a message; then `screen()`.
+- After any swipe or long press the `[index]` numbers change: call `screen()` before tapping.
+- Only swipe things a real user would; never swipe to confirm a payment or any commitment.
+
 ## Writing as the user
 - Natural sentences in the customer language from the profile, like a real person, not keywords.
 - Vary wording across runs; one realistic detour (a follow-up question, a typo, changing your mind) per

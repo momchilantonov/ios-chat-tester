@@ -11,6 +11,7 @@ INPUT_TYPES = ("textField", "textView", "searchField")
 TEXT_TYPES = ("text", "textView", "other", "cell", "link")
 BUTTON_TYPES = ("button", "link")
 CHROME_TYPES = ("navigationBar", "tabBar", "toolbar")  # app chrome, not conversation
+CONTAINER_TYPES = ("scrollView", "collectionView", "table")  # swipe targets such as carousels
 
 
 def norm(text: str) -> str:
@@ -66,6 +67,8 @@ class Element:
             parts.append("disabled")
         cx, cy = self.center
         parts.append("@(%d,%d)" % (cx, cy))
+        if self.type in CONTAINER_TYPES:
+            parts.append("%dx%d" % (self.w, self.h))
         return " ".join(parts)
 
 
@@ -178,7 +181,8 @@ class Screen:
         return tuple((e.type, e.text, round(e.y)) for e in self.visible() if e.text)
 
     def listing(self, limit: int = 120) -> List[str]:
-        vis = [e for e in self.visible() if e.text or e.id or e.type in INPUT_TYPES + BUTTON_TYPES]
+        vis = [e for e in self.visible()
+               if e.text or e.id or e.type in INPUT_TYPES + BUTTON_TYPES + CONTAINER_TYPES]
         lines = [e.describe() for e in vis[:limit]]
         if len(vis) > limit:
             lines.append("... %d more elements" % (len(vis) - limit))
