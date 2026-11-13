@@ -25,6 +25,8 @@ python3 install.py --name <agent-name> --bundle-id <bundle id> --app-repo <ios a
   `tester/bin/<agent-name>-planner` and builds the UI driver with `xcodebuild`.
 - Exit code 1 means there are things to fix. They are listed at the end of the output.
 - **After every update, restart the agents.** A running session keeps the old instructions.
+- **Read the newest section of `CHANGELOG.md`.** It names new config keys to set in `tester/config.json` (the
+  installer never changes your existing config) and lists what to test again.
 - If the output has `WARN ... <name>.agent.md exists`: a same-named agent file in a repo can take precedence
   over the installed one. If it is empty or stale and not tracked by that repo's git, tell the human and
   suggest removing it. Don't delete tracked files yourself.
@@ -107,7 +109,31 @@ working. Don't touch the same Simulator, don't press Run in Xcode, and keep the 
 - `session_find_s` (default 4): how long to look for the session id after the first message.
 
 ## 6. Evaluate and report back
-For each problem, report:
+The report reaches the maintainer as **photos of the screen**. Nothing from this machine is uploaded.
+- Write it to `tester/runs/REPORT-FOR-MAINTAINER.md` (git-ignored), never to the clone's root or anywhere
+  tracked.
+- Make it readable in a few photos: English, short lines, at most about 60 lines per screen, the most
+  important items first. Open it full-screen in the editor (Markdown preview) so the human can photograph it
+  page by page.
+- Keep it free of project data: no customer data, no ids, no URLs. Paraphrase long bot texts (for example
+  "a 2-letter Yes word"); generic flow and field names are fine.
+
+Structure that works well:
+```markdown
+# Round <n> check - findings and requirements
+Tool version: <git log --oneline -1>. Unit tests: <n/n OK>.
+## How it was checked      (plan, rows, results counts, config used, model actually used)
+## Fixed in this round (works with this system)
+## Requirements (by priority)
+### R1 (high): <short title>
+What happened: <action> -> <tool + trimmed JSON result> -> <what was on screen>
+Required: <bullets: the behaviour that would fix it; a unit test idea>
+### R2 (medium): ...
+## What still works only by hand
+## Verdict for this round      (can an unattended agent rely on it? what must be fixed first)
+```
+
+For each problem, include:
 - what you asked the agent;
 - what it did (the tool name and the JSON result it got);
 - what you expected;
