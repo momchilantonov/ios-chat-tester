@@ -19,6 +19,7 @@ BOT = {
     "cards": ("Which card?", ["Debit", "Credit"]),
     "debit": ("Your debit card is blocked.", []),
     "pick": ("Select the cards to block:", ["Продължи"]),
+    "link": ("Read more on our website.", ["Open link"]),
 }
 
 
@@ -37,6 +38,7 @@ class FakeApp:
         self.start_on_menu = False   # fresh launch shows a menu; "Remote Flow" opens the chat
         self.prefill = ""            # text pre-filled in the composer on launch
         self.qr_as_other = False     # quick replies exposed as plain views, not buttons (common in chat SDKs)
+        self.stale_y = None          # old quick replies keep reporting a position (y) after scrolling away
         self.lock = threading.Lock()
         self.received = []           # what the "bot" received: {"text"} or {"payload"}
         self.commands = []
@@ -59,11 +61,14 @@ class FakeApp:
         self.carousel_pos = 0
         self.menu = False            # long-press context menu
         self.swipes = []
+        self.stale = []              # labels of old quick replies that still report a position
         if self.welcome:
             self.messages.append(("bot", "Welcome! How can I help?"))
 
     def _user(self, text, payload=None):
         self.messages.append(("user", text))
+        if self.stale_y is not None and self.buttons:
+            self.stale = [b for b, _ in self.buttons]
         self.buttons = []
         self.received.append({"payload": payload} if payload else {"text": text})
         self.scroll_until = time.monotonic() + 0.6
@@ -151,6 +156,9 @@ class FakeApp:
         if self.scrollbars and time.monotonic() < self.scroll_until:
             els.append({"type": "other", "label": "Vertical scroll bar, 2 pages", "id": "", "value": "0%",
                         "x": 384, "y": 95, "w": 3, "h": 650})
+        for i, label in enumerate(self.stale):  # dead copies: tapping them does nothing
+            els.append({"type": "button", "label": label, "id": "", "value": "",
+                        "x": 10 + 210 * i, "y": self.stale_y, "w": 200, "h": 44})
         if self.banner:
             els.append({"type": "text", "label": self.banner, "id": "", "value": "", "x": 100, "y": 95, "w": 190, "h": 20})
         if self.menu:
@@ -222,6 +230,9 @@ class FakeApp:
                         if not e["enabled"]:
                             return {}
                         label = next(b for b, _ in self.buttons if "qr." + b.lower() == e["id"])
+                        if label == "Open link":      # opens Safari: the app goes to the background
+                            self.state = "background"
+                            return {}
                         payload = dict(self.buttons).get(label)
                         self._user(label, payload="/" + payload)
                         return {}

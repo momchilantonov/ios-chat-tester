@@ -35,6 +35,9 @@ Source: <flow files / ticket / guide section the plan was made from>
   - `{...}` inside quotes is variable content, e.g. "Здравей, {name}!".
   - `buttons: "A", "B"` - these quick replies must be offered (others may exist unless you write "only").
   - anything outside quotes describes behaviour the tester judges ("asks for the card", "no error").
+- **Links and deeplinks**: the Simulator cannot really open them. If a row expects a link/deeplink to open,
+  a tap that leaves the app (Safari, another app - even with an error page) is `success`; the opened page is
+  not judged. The tester brings the app back automatically.
 - **Result** (filled by the tester only): `success` · `fail: <what happened instead>` ·
   `blocked: <why it could not be executed>`. Rows not run end up as `blocked: not run`.
 - Keep cells on one line; use `\|` for a literal pipe.

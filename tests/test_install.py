@@ -166,6 +166,14 @@ class InstallTest(unittest.TestCase):
         python, note = self.mod.pick_python()
         self.assertTrue(python)
 
+    def test_same_named_agent_in_a_repo_is_reported(self):
+        agents = self.app_repo / ".github" / "agents"
+        agents.mkdir(parents=True)
+        (agents / "chat-tester.agent.md").write_text("")
+        code, out = self.run_install("--bundle-id", "a.b", "--app-repo", str(self.app_repo))
+        self.assertEqual(code, 1)
+        self.assertIn("chat-tester.agent.md exists (empty)", out)
+
     def test_ask_approval_keeps_prompts(self):
         self.run_install("--bundle-id", "a.b", "--ask-approval")
         launcher = (self.clone / "tester" / "bin" / "chat-tester").read_text()

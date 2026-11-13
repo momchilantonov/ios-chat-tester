@@ -112,6 +112,18 @@ class Screen:
             return True
         return bool(e.text) and any(rx.search(e.text) for rx in self.ignore)
 
+    def carousels(self) -> List[Element]:
+        """Horizontal strips (carousels): scroll containers much lower than the screen and at least half as wide."""
+        if not self.height or not self.width:
+            return []
+        return [e for e in self.visible() if e.type in CONTAINER_TYPES
+                and e.h <= self.height * 0.45 and e.w >= self.width * 0.5]
+
+    def carousel_texts(self) -> List[Element]:
+        boxes = self.carousels()
+        return [e for e in self.visible() if e.text and e.type in TEXT_TYPES and not self.is_noise(e)
+                and self._inside_any(e, boxes)] if boxes else []
+
     @staticmethod
     def _inside_any(e: Element, boxes: Sequence[Element]) -> bool:
         cx, cy = e.center
@@ -168,6 +180,7 @@ class Screen:
                  if e.type in TEXT_TYPES and e.text.strip() and e.index not in skip
                  and not self.is_noise(e)
                  and not self._inside_any(e, excluded)          # e.g. a custom placeholder label in the composer
+                 and not self._inside_any(e, self.carousels())  # carousel cards are reported separately
                  and not any(b.index != e.index and b.contains(e) for b in buttons)
                  and not any(c.contains(e) for c in chrome)]
         out = []

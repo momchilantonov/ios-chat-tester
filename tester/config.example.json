@@ -33,6 +33,13 @@
       "/(?:conversations?|sessions?|trackers?|extract)/([A-Za-z0-9][A-Za-z0-9._:@-]{5,})"
     ]
   },
+  "reply_evidence": {
+    "_comment": "Optional, recommended: count bot replies in an endpoint (needs the session id). Detects replies that repeat an earlier message and returns full texts of long messages the screen shows only partly. list = path to the event list, match = fields that mark a bot reply, text = path to its text inside one event.",
+    "endpoint": "",
+    "list": "events",
+    "match": {"event": "bot"},
+    "text": "text"
+  },
   "app_log": {
     "_comment": "Empty = the app's own process. Or a log predicate, e.g. subsystem == \"com.example.sdk\"",
     "predicate": ""

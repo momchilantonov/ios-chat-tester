@@ -28,5 +28,9 @@ Replace every TODO. Delete what does not apply.
 ## Where flows live in this repo
 - TODO paths to flows, functions, response templates, prompts
 
+## Known Simulator behaviour (accepted)
+- Links and deeplinks cannot open in the Simulator; a tap that opens Safari/another app counts as success
+  when the row expects a link. TODO add other accepted differences
+
 ## Rules for this project
 - TODO e.g. scope limits (which product line only), test data only, things never to confirm

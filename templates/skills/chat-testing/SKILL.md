@@ -20,6 +20,11 @@ wait_for_reply()
   `replied: false` + `timed_out` means nothing new arrived - look (`screen`, `screenshot`) and read the log
   before deciding it is a bug. A slow bot is not a missing answer: one more `wait_for_reply(timeout_s=60)`
   is fine.
+- **Links / deeplinks**: when a tap opens another app (Safari, even a 404 page), `tap` returns
+  `left_app: true` and brings the app back. That is the expected Simulator behaviour - if the row expects a
+  link, record `success`; never report the opened page as a bug. Then `screen()`: the chat may have reset.
+- **Long messages**: the screen may show only the first part of a long bubble. For exact-text checks use the
+  endpoint evidence (`evidence_texts` from `wait_for_reply` when configured, or `fetch`) and say so in the note.
 - **Options are tapped, never typed.** Some apps don't expose quick replies as buttons; then their labels
   appear in `new_messages`/`screen()` as text. Tap them anyway: `tap(element=n)` or `tap(text="label")`.
   `send_message` refuses to type a label that is on screen and tells you which element to tap.

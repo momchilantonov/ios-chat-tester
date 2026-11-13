@@ -22,7 +22,7 @@ PROFILE = HOME / "profile.md"
 WRITABLE = ("runs", "plans")
 WRITABLE_EXT = (".md", ".json", ".txt", ".yaml", ".yml")
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
-VERDICTS = ("PASS", "FAIL", "BLOCKED", "INCONCLUSIVE")
+VERDICTS = ("PASS", "FAIL", "BLOCKED", "INCOMPLETE", "INCONCLUSIVE")
 
 
 class ToolError(Exception):
@@ -48,16 +48,21 @@ def _http_get(url: str, timeout: float = 10.0) -> str:
         return resp.read().decode("utf-8", errors="replace")
 
 
-def _select(doc: Any, path: str) -> Any:
-    """Tiny JSON path: 'events[-1].data.text' or 'events.*.event'."""
+def _select_all(doc: Any, path: str) -> List[Any]:
+    """Tiny JSON path, always a list of matches: 'events[-1].data.text', 'events[-6:].text',
+    'events.*.event'. A key applied to a list is applied to each element."""
     if not path:
-        return doc
+        return [doc]
     cur: List[Any] = [doc]
-    for part in re.findall(r"[^.\[\]]+|\[-?\d+\]|\[\*\]", path):
+    for part in re.findall(r"[^.\[\]]+|\[-?\d*:-?\d*\]|\[-?\d+\]|\[\*\]", path):
         nxt: List[Any] = []
         for node in cur:
             if part in ("*", "[*]"):
                 nxt.extend(node if isinstance(node, list) else list(node.values()) if isinstance(node, dict) else [])
+            elif part.startswith("[") and ":" in part:
+                a, b = part[1:-1].split(":")
+                if isinstance(node, list):
+                    nxt.extend(node[int(a) if a else None:int(b) if b else None])
             elif part.startswith("["):
                 i = int(part[1:-1])
                 if isinstance(node, list) and -len(node) <= i < len(node):
@@ -68,8 +73,16 @@ def _select(doc: Any, path: str) -> Any:
                 i = int(part)
                 if -len(node) <= i < len(node):
                     nxt.append(node[i])
+            elif isinstance(node, list):
+                nxt.extend(x[part] for x in node if isinstance(x, dict) and part in x)
         cur = nxt
-    return cur[0] if len(cur) == 1 else cur
+    return cur
+
+
+def _select(doc: Any, path: str) -> Any:
+    cur = _select_all(doc, path)
+    sliced = bool(re.search(r"\[-?\d*:-?\d*\]|\*", path or ""))
+    return cur[0] if len(cur) == 1 and not sliced else cur
 
 
 class Run:
@@ -117,6 +130,9 @@ class Tester:
         self.session_id = ""
         self._executable = ""
         self._sent: set = set()            # normalised texts the user typed in this conversation
+        self._last_tap = ""                # label of the last tapped element
+        self._alternatives: List[Element] = []
+        self._ev_base: Optional[int] = None  # reply-evidence item count at the last user action
 
     # ---------------------------------------------------------------- basics
     @property
@@ -163,12 +179,41 @@ class Tester:
         if self.run:
             self.run.journal(entry)
 
+    def _evidence(self) -> Optional[List[Any]]:
+        """Bot-reply items from the configured evidence endpoint, or None when not configured/available."""
+        ev = self.cfg.get("reply_evidence") or {}
+        tmpl = self.cfg["endpoints"].get(ev.get("endpoint") or "")
+        if not tmpl or ("{session_id}" in tmpl and not self.session_id):
+            return None
+        url = tmpl.replace("{session_id}", urllib.parse.quote(self.session_id, safe=""))
+        try:
+            doc = json.loads(self.http_get(url))
+        except (ValueError, OSError, urllib.error.URLError):
+            return None
+        items = _select_all(doc, ev.get("list") or "")
+        if len(items) == 1 and isinstance(items[0], list):
+            items = items[0]
+        match = ev.get("match") or {}
+        return [it for it in items
+                if all(_select(it, k) == v for k, v in match.items())]
+
+    def _evidence_texts(self, items: List[Any]) -> List[str]:
+        path = (self.cfg.get("reply_evidence") or {}).get("text") or ""
+        out: List[str] = []
+        for it in items:
+            for t in (_select_all(it, path) if path else []):
+                if isinstance(t, str) and t.strip():
+                    out.append(t)
+        return out
+
     def _mark_turn(self, anchor: str, before: Screen, exclude: List[Optional[Element]]) -> None:
+        items = self._evidence()
+        self._ev_base = len(items) if items is not None else None
         self._anchor = anchor
         self._before = [m.text for m in before.messages(exclude)]
         self._turn_offsets = self._log_sizes()
         self._turn_wall = time.time()
-        self._seen.update(self._before)
+        self._seen.update(norm(t) for t in self._before)
 
     # ---------------------------------------------------------------- setup / status
     def status(self) -> Dict[str, Any]:
@@ -229,6 +274,7 @@ class Tester:
             res = self._call("launch", arguments=list(self.cfg["app"].get("launch_arguments") or []))
             self._seen = set()
             self._sent = set()
+            self._last_tap = ""
             self.session_id = ""
         else:
             res = self._call("activate")
@@ -318,16 +364,54 @@ class Tester:
         self._mark_turn(anchor, before, [comp])
         self._pace()
         self._call("tap", x=px, y=py)
+        if target is not None and target.text:
+            self._last_tap = target.text
         entry = {"action": "tap", "target": what, "x": px, "y": py}
         if target is not None:
             entry.update({"label": target.label, "id": target.id, "value": target.value, "type": target.type})
             if self.run and target.type in ("button", "link"):
                 self.run.transcript.append({"from": "user", "tap": target.label or target.id})
+        out: Dict[str, Any] = {"tapped": what, "next": "call wait_for_reply if this should make the bot answer"}
+        self.sleep(0.5)
+        state = self._call("state").get("app_state")
+        if state != "foreground":
+            # A link or deeplink opened another app (usually Safari). The Simulator cannot load real targets,
+            # so the page itself is not under test: bring the app back and report it.
+            self.sleep(1.0)
+            self._call("activate")
+            entry["left_app"] = True
+            self._journal(entry)
+            return {"tapped": what, "left_app": True,
+                    "note": "the tap opened a link/deeplink in another app; the app was brought back. Links "
+                            "cannot really open in the Simulator - if the row expects a link or deeplink, that "
+                            "is success (don't judge the opened page). Check screen(): the conversation may "
+                            "have been reset."}
+        if self._alternatives:
+            # The same label is on screen more than once: make sure the tap did something.
+            self.sleep(1.2)
+            after = self._snapshot()
+            if after.signature() == before.signature():
+                out = {"tapped": what, "no_visible_effect": True,
+                       "warning": "nothing changed on screen. %r is shown %d times - this copy may be an old or "
+                                  "hidden one. Call screen() and tap(element=n) on the copy that belongs to the "
+                                  "latest bot message." % (target.text if target else "", len(self._alternatives) + 1),
+                       "other_copies": [e.describe() for e in self._alternatives[:5]]}
+                entry["no_visible_effect"] = True
         self._journal(entry)
-        return {"tapped": what, "next": "call wait_for_reply if this should make the bot answer"}
+        return out
+
+    def _rank_fresh(self, scr: Screen, hits: List[Element]) -> List[Element]:
+        """Several copies of a label (old menus keep reporting positions after scrolling away): prefer buttons,
+        then copies below the user's latest message (they belong to the newest bot reply), then the lowest."""
+        latest = [norm(t) for t in self._sent] + ([norm(self._last_tap)] if self._last_tap else [])
+        mine = [m for m in scr.messages() if norm(m.text) in latest]
+        floor = max((m.y for m in mine), default=None)
+        return sorted(hits, key=lambda e: (e.type not in BUTTON_TYPES,
+                                           floor is not None and e.y <= floor, -e.y))
 
     def _target(self, before: Screen, element: Optional[int], text: str, ident: str) -> Optional[Element]:
         """Resolve element [index] (from the listing the agent saw), visible text or accessibility id."""
+        self._alternatives = []
         target: Optional[Element] = None
         if element is not None:
             if self.shown is None:
@@ -345,7 +429,9 @@ class Tester:
                 comp = before.composer(self.chat)
                 raise ToolError("nothing on screen matches %r" % (text or ident),
                                 buttons=[b.label for b in before.buttons([comp])])
+            hits = self._rank_fresh(before, hits)
             target = hits[0]
+            self._alternatives = hits[1:]
         if target is not None and not before.on_screen(target):
             raise ToolError("element is off screen - scroll first", element=target.describe())
         return target
@@ -528,6 +614,8 @@ class Tester:
         poll = float(waits["poll_ms"]) / 1000.0
         start = self.clock()
         last_sig, stable_since = None, start
+        ev_items: Optional[List[Any]] = None
+        polls = 0
         while True:
             scr = self._snapshot()
             comp = scr.composer(self.chat)
@@ -536,25 +624,44 @@ class Tester:
             if sig != last_sig:
                 last_sig, stable_since = sig, now
             new = new_messages(self._before, scr, self._anchor, [comp], self._seen)
+            cards = [e.text for e in scr.carousel_texts() if norm(e.text) not in self._seen]
+            if self._ev_base is not None and polls % 2 == 0:
+                ev_items = self._evidence()
+            polls += 1
+            ev_new = ev_items[self._ev_base:] if (ev_items is not None and self._ev_base is not None) else []
             typing = scr.typing(self.chat)
             settled = now - stable_since >= quiet
-            if (new and settled and not typing) or scr.alerts or now - start >= timeout:
+            if ((new or cards or ev_new) and settled and not typing) or scr.alerts or now - start >= timeout:
                 break
             self.sleep(poll)
         self.shown = scr
         send = scr.send_button(self.chat, comp)
         buttons = scr.buttons([comp, send])
-        out = {"replied": bool(new), "new_messages": new,
+        replied = bool(new or cards or ev_new)
+        out = {"replied": replied, "new_messages": new,
                "buttons": ["[%d] %s%s" % (b.index, b.label or b.id, "" if b.enabled else " (disabled)")
                            for b in buttons],
                "waited_s": round(self.clock() - start, 1), "typing": typing}
         controls = scr.controls([comp, send])
         if controls:
             out["controls"] = [c.describe() for c in controls]
-        if not new:
+        carousel = scr.carousel_texts()
+        if carousel:
+            out["carousel"] = [e.describe() for e in carousel]
+            out["new_carousel_cards"] = cards
+        if self._ev_base is not None:
+            out["evidence_new_replies"] = len(ev_new)
+            texts = self._evidence_texts(ev_new)
+            if texts:
+                out["evidence_texts"] = [t[:2000] for t in texts]  # full texts - the screen may show only part
+            if ev_new and not new and not cards:
+                out["note"] = ("the endpoint shows a new bot reply but nothing new on screen: it repeats an earlier "
+                               "message, or it was not rendered - compare with screen()")
+        if not replied:
             out["timed_out"] = True
             out["hint"] = ("no new bot message - check screen()/screenshot(), read_log(since='turn') or "
-                           "app_log(since='turn'). A reply identical to an earlier message is not detected as new.")
+                           "app_log(since='turn'). Without reply_evidence configured, a reply identical to an "
+                           "earlier message is not detected as new.")
         if scr.alerts:
             out["alerts"] = scr.alerts
         self._journal(dict(out, action="wait_for_reply"))
@@ -563,8 +670,11 @@ class Tester:
                                         "buttons": [b.label or b.id for b in buttons]})
         # Next wait compares against this screen unless a new action resets it.
         self._before = [m.text for m in scr.messages([comp])]
-        self._seen.update(self._before)
+        self._seen.update(norm(t) for t in self._before)
+        self._seen.update(norm(e.text) for e in carousel)
         self._anchor = ""
+        if ev_items is not None:
+            self._ev_base = len(ev_items)
         return out
 
     def scroll(self, direction: str = "up", amount: float = 0.5) -> Dict[str, Any]:
@@ -835,14 +945,18 @@ class Tester:
     def _plan_verdict(self, run: Run) -> Dict[str, Any]:
         statuses = [run.results.get(r["row"], {}).get("status", "blocked") for r in run.rows]
         counts = {s: statuses.count(s) for s in STATUSES}
+        not_run = [r["row"] for r in run.rows if r["row"] not in run.results]
         if counts["fail"]:
             verdict = "FAIL"
+        elif not_run:
+            verdict = "INCOMPLETE"   # the run stopped before every row was tried
         elif counts["blocked"]:
             verdict = "BLOCKED"
         else:
             verdict = "PASS"
-        return {"verdict": verdict, "counts": counts,
-                "not_run": [r["row"] for r in run.rows if r["row"] not in run.results]}
+        counts["blocked"] -= len(not_run)
+        counts["not_run"] = len(not_run)
+        return {"verdict": verdict, "counts": counts, "not_run": not_run}
 
     def _need_run(self) -> Run:
         if not self.run:

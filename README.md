@@ -77,7 +77,9 @@ Every test session:
      ask for approval before every tap or message. Those tools only drive the Simulator, read local
      endpoints and logs, and write under `tester/runs/` and `tester/plans/`. Other actions, such as reading
      files outside the allowed folders, still ask. If you want to be asked every time, install with
-     `--ask-approval`.
+     `--ask-approval`. If your organisation's Copilot policy requires approval for MCP tools, the flag has no
+     effect. Then answer "yes, for this session" the first time each tool asks; there are about 10.
+     Non-interactive runs (`copilot -p`) are not possible under such a policy.
    - **VS Code:** agent picker → `<name>`. The first time it asks, choose "always allow" for the `simchat` tools.
    - Free-form requests work too, e.g. `Test blocking a lost card, as an impatient customer`.
 6. **Watch the Simulator** and answer the agent if it asks something, for example the session id.

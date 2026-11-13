@@ -26,6 +26,7 @@ DEFAULTS: Dict[str, Any] = {
         r"/(?:conversations?|sessions?|trackers?|extract)/([A-Za-z0-9][A-Za-z0-9._:@-]{5,})",
     ]},
     "app_log": {"predicate": ""},
+    "reply_evidence": {"endpoint": "", "list": "", "match": {}, "text": ""},
     "pace_ms": 400,
     "waits": {"reply_timeout_s": 45, "quiet_ms": 2000, "poll_ms": 600, "send_confirm_s": 10},
     "endpoints": {},

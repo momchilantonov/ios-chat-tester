@@ -51,7 +51,8 @@ class Stack:
         if url not in self.http:
             import urllib.error
             raise urllib.error.URLError("connection refused")
-        return self.http[url]
+        value = self.http[url]
+        return value() if callable(value) else value
 
     def close(self):
         self.server.close()

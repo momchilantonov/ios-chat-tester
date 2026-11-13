@@ -286,6 +286,7 @@ class Installer:
                 self.merge_json(vscode / "mcp.json", "servers", code_entry)
             else:
                 self.say("  skip     VS Code user folder %s not found (use --vscode-dir)" % vscode)
+        self._check_shadowing([name for name, _ in agents])
         dirs = [str(TESTER)] + [p for _, p in sorted((self.cfg.get("repos") or {}).items())]
         add = " ".join("--add-dir=%s" % _sh(d) for d in dirs)
         # The simchat tools only drive the Simulator, read local endpoints/logs and write under runs/ and plans/,
@@ -298,6 +299,25 @@ class Installer:
                         % (agent_name, "" if self.a.ask_approval else ", simchat tools pre-approved",
                            agent_name, allow, add))
             self.write(TESTER / "bin" / agent_name, launcher, mode=0o755)
+
+    def _check_shadowing(self, names):
+        """A repo-level .github/agents/<name>.agent.md with the same name overrides the installed agent there."""
+        repos = [Path(p) for p in (getattr(self, "cfg", {}) or {}).get("repos", {}).values()]
+        for parent in ROOT.parents:  # the clone may live inside another repo (e.g. its .github folder)
+            if (parent / ".git").exists():
+                repos.append(parent)
+                break
+        targets = {Path(self.a.into).expanduser().resolve()} if self.a.into else set()
+        for repo in dict.fromkeys(p.expanduser().resolve() for p in repos):
+            if repo in targets:
+                continue
+            for name in names:
+                f = repo / ".github" / "agents" / ("%s.agent.md" % name)
+                if f.exists():
+                    empty = f.stat().st_size == 0
+                    self.say("  WARN     %s exists%s - in that repo it can take precedence over the installed agent. "
+                             "Remove or rename it, or install with another --name." % (f, " (empty)" if empty else ""))
+                    self.problems.append("same-named agent in %s" % f)
 
     def build_driver(self):
         self.header("[4/4] UI driver build")

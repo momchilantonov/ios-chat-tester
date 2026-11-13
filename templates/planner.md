@@ -20,8 +20,12 @@ iOS Simulator. You never run tests and never change code. You can read and searc
 2. Choose conversations: the happy path first, then each meaningful branch (every button, cancel/back,
    "no", invalid input, empty/missing data from the mocks). One `##` section per conversation, each
    complete from a fresh app launch.
-3. Rows: one customer action per row. Customer messages are natural sentences in the customer language,
-   as a real person would write them - not keywords, not payload commands unless the user asks for them.
+3. Rows: one customer action per row.
+   - **If the source (guide, ticket, user) gives the prompt, copy it word for word** - never rephrase, shorten
+     or "improve" it: a different wording can route the bot to another flow (e.g. RAG instead of the flow).
+   - Only when no prompt is given: use the flow's own trigger examples from the repo verbatim; if there are
+     none, write a natural sentence in the customer language and mark the row "(prompt invented)" in Expected.
+   - Not keywords, not payload commands unless the user asks for them.
 4. Expected: exact bot texts in "double quotes" copied verbatim from the response files (with `{...}`
    for variables), plus the buttons that must be offered and anything else observable. Never invent a
    text you could not find - describe the behaviour instead and add "(text not found in repo)".
@@ -34,6 +38,9 @@ iOS Simulator. You never run tests and never change code. You can read and searc
   PINs or credentials in prompts.
 - Follow the project rules in the profile (scope, language, data).
 - Keep plans small: 3-8 conversations, 2-10 rows each. Split big flows into several plans.
+- Don't state counts in prose ("seven conversations") - the table is the truth.
+- A row that expects a link/deeplink to open: write "opens link <what>" in Expected - the tester counts
+  leaving the app as success (the Simulator can't open real links).
 
 ## Reply
 The plan path, the conversations it covers, preconditions the user must prepare, open questions

@@ -91,7 +91,7 @@ class PlanRunTest(unittest.TestCase):
             self.t.record_result(4, "blocked")              # blocked needs a reason
         end = self.t.end_run("Row 3 failed, row 4 not run.")
         self.assertEqual(end["verdict"], "FAIL")
-        self.assertEqual(end["counts"], {"success": 2, "fail": 1, "blocked": 1})
+        self.assertEqual(end["counts"], {"success": 2, "fail": 1, "blocked": 0, "not_run": 1})
         self.assertEqual(end["not_run"], [4])
         results = parse_plan(Path(end["results"]).read_text(encoding="utf-8"))
         self.assertEqual([r["result"] for r in results["rows"]],
@@ -110,6 +110,9 @@ class PlanRunTest(unittest.TestCase):
         for row in (1, 2, 3, 4):
             self.t.record_result(row, "success")
         self.assertEqual(self.t.end_run("x")["verdict"], "PASS")
+        self.t.start_run(plan=str(self.plan))
+        self.t.record_result(1, "success")
+        self.assertEqual(self.t.end_run("stopped early")["verdict"], "INCOMPLETE")
 
     def test_plan_without_table_and_record_without_plan(self):
         bad = Path(self.tmp.name) / "bad.md"
