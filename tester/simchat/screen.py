@@ -35,17 +35,29 @@ def key(text: str) -> str:
     return "".join(ch for ch in norm(text) if ch.isalnum())
 
 
+def anchor_hits(scr: "Screen", msgs: List["Element"], anchor: str) -> List[List["Element"]]:
+    """Occurrences of the user's own bubble. A multi-line anchor (the echo of a submit that lists the selected
+    rows) must match as consecutive user-side lines; the last line marks where the reply starts."""
+    lines = [ln for ln in (anchor or "").split("\n") if ln.strip()]
+    if len(lines) <= 1:
+        return [[m] for m in msgs if anchor_match(scr, m, anchor)]
+    out = []
+    for i in range(len(msgs) - len(lines) + 1):
+        run = msgs[i:i + len(lines)]
+        if all(anchor_match(scr, m, ln) for m, ln in zip(run, lines)):
+            out.append(run)
+    return out
+
+
 def anchor_match(scr: "Screen", e: "Element", anchor: str) -> bool:
-    """Is e the user's own message/tap echo for this anchor? Exact (norm_label); a prefix only for a bubble
-    on the user's side (the echo of a long label may be truncated)."""
+    """Is e the user's own message/tap echo for this anchor? Only a bubble on the user's side; exact
+    (norm_label), or a prefix (the echo of a long label may be truncated)."""
     a = norm_label(anchor)
-    if not a:
-        return False
+    if not a or (scr.width and not scr.user_side(e)):
+        return False  # never a bot bubble, an option row with the same text, a button or a hidden copy
     t = norm_label(e.text)
     if t == a:
         return True
-    if not scr.user_side(e):
-        return False
     t = t.rstrip("…")
     return (len(a) > 30 and t.startswith(a[:30])) or (len(t) >= 10 and a.startswith(t))
 
@@ -69,6 +81,7 @@ class Element:
     y: float
     w: float
     h: float
+    depth: int = 0
 
     @property
     def text(self) -> str:
@@ -105,6 +118,15 @@ class Element:
             parts.append("%dx%d" % (self.w, self.h))
         return " ".join(parts)
 
+    def overlap(self, other: "Element") -> float:
+        ix = min(self.x + self.w, other.x + other.w) - max(self.x, other.x)
+        iy = min(self.y + self.h, other.y + other.h) - max(self.y, other.y)
+        return ix * iy if ix > 0 and iy > 0 else 0.0
+
+    def same_frame(self, other: "Element") -> bool:
+        return all(abs(a - b) <= 1 for a, b in ((self.x, other.x), (self.y, other.y), (self.w, other.w),
+                                                 (self.h, other.h)))
+
 
 class Screen:
     def __init__(self, raw: Dict[str, Any], ignore: Sequence[str] = ()):
@@ -122,12 +144,15 @@ class Screen:
                 index=i, type=str(e.get("type", "")), label=str(e.get("label") or ""),
                 id=str(e.get("id") or ""), value=str(e.get("value") or ""),
                 placeholder=str(e.get("placeholder") or ""), enabled=bool(e.get("enabled", True)),
-                selected=bool(e.get("selected", False)), x=float(e.get("x", 0)), y=float(e.get("y", 0)), w=float(e.get("w", 0)), h=float(e.get("h", 0))))
+                selected=bool(e.get("selected", False)), x=float(e.get("x", 0)), y=float(e.get("y", 0)),
+                w=float(e.get("w", 0)), h=float(e.get("h", 0)), depth=int(e.get("depth") or 0)))
+        self.hidden: set = set()  # indices of hidden copies (set by the tester after asking the driver)
+        self._shown = [e for e in self.elements if self.on_screen(e) and not self._under_chrome(e)]
 
     # -- geometry -------------------------------------------------------------------------------
     def user_side(self, e: Element) -> bool:
         """Right-aligned: the user's own bubbles (and tap echoes) in a chat."""
-        return bool(self.width) and e.x > self.width * 0.2 and e.x + e.w / 2 > self.width * 0.5
+        return bool(self.width) and e.x > self.width * 0.12 and e.x + e.w / 2 > self.width * 0.5
 
     def on_screen(self, e: Element) -> bool:
         if not self.width or not self.height:
@@ -136,7 +161,64 @@ class Screen:
         return 0 <= cx <= self.width and 0 <= cy <= self.height
 
     def visible(self) -> List[Element]:
-        return [e for e in self.elements if self.on_screen(e)]
+        """On screen, not under the navigation bar or a top banner, and not a hidden copy."""
+        return [e for e in self._shown if e.index not in self.hidden]
+
+    def _members(self, bar: Element) -> set:
+        """Elements that belong to a bar: its descendants (snapshot depth), or - without depth - inside it."""
+        if len({e.depth for e in self.elements}) > 1:
+            out = set()
+            for e in self.elements[bar.index + 1:]:
+                if e.depth <= bar.depth:
+                    break
+                out.add(e.index)
+            return out
+        return {e.index for e in self.elements if e.index != bar.index and bar.contains(e)}
+
+    def _under_chrome(self, e: Element) -> bool:
+        """Old elements left under the navigation bar or a top banner (e.g. a disabled "Continue" at y=18)."""
+        if not hasattr(self, "_bars"):
+            self._bars = [(b, self._members(b)) for b in self.elements if self.on_screen(b) and (
+                b.type == "navigationBar" or (b.type in ("other", "text") and b.id and BANNER_RX.search(b.id)
+                                              and b.y < (self.height or 1e9) * 0.25))]
+        cx, cy = e.center
+        for bar, members in self._bars:
+            if e.index == bar.index or e.index in members:
+                continue
+            if bar.x <= cx <= bar.x + bar.w and cy < bar.y + bar.h:
+                return True
+        return False
+
+    def overlapping(self) -> List[Element]:
+        """Texts and buttons whose frames overlap another one's (not parent/child, not a wrapper with the same
+        text). Real bubbles never overlap; stacked hidden copies of old bubbles do."""
+        els = [e for e in self._shown if e.text and e.type in TEXT_TYPES + BUTTON_TYPES and not self.is_noise(e)]
+        out = set()
+        for i, a in enumerate(els):
+            for b in els[i + 1:]:
+                area = a.overlap(b)
+                if area <= 0 or area < 0.25 * min(a.w * a.h, b.w * b.h):
+                    continue
+                if a.same_frame(b):
+                    if norm(a.text) == norm(b.text):
+                        continue
+                elif a.contains(b) or b.contains(a):
+                    continue
+                out.update((a.index, b.index))
+        return [e for e in els if e.index in out]
+
+    def neighbour(self, e: Element) -> str:
+        """The text next to e on the same line, or else the line right below it (e.g. a masked card number)."""
+        pool = [o for o in self.visible() if o.text and o.index != e.index and o.type in TEXT_TYPES + BUTTON_TYPES
+                and not o.contains(e) and not e.contains(o)]
+        cy = e.center[1]
+        right = [o for o in pool if abs(o.center[1] - cy) < max(e.h, 10) / 2 and o.x >= e.x + e.w - 1]
+        if right:
+            return min(right, key=lambda o: o.x).text
+        gap = max(e.h, 20.0) * 1.5
+        below = [o for o in pool if 0 <= o.y - (e.y + e.h) + 2 <= gap
+                 and min(o.x + o.w, e.x + e.w) > max(o.x, e.x)]
+        return min(below, key=lambda o: o.y).text if below else ""
 
     def is_noise(self, e: Element) -> bool:
         """Scroll indicators (thin), and labels matching chat.ignore_labels."""
@@ -319,9 +401,9 @@ class Screen:
                      if e.text or e.type in CONTROL_TYPES + BUTTON_TYPES)
 
     def listing(self, limit: int = 120) -> List[str]:
-        vis = [e for e in self.visible()
+        vis = [e for e in self._shown
                if e.text or e.id or e.type in INPUT_TYPES + BUTTON_TYPES + CONTAINER_TYPES]
-        lines = [e.describe() for e in vis[:limit]]
+        lines = [e.describe() + (" HIDDEN-COPY" if e.index in self.hidden else "") for e in vis[:limit]]
         if len(vis) > limit:
             lines.append("... %d more elements" % (len(vis) - limit))
         return lines
@@ -329,8 +411,8 @@ class Screen:
 
 def new_messages(before: Sequence[str], screen: Screen, anchor: str,
                  exclude: Iterable[Optional[Element]] = (), seen: Iterable[str] = (),
-                 confirm: Iterable[str] = ()) -> List[str]:
-    return [e.text for e in new_message_elements(before, screen, anchor, exclude, seen, confirm)]
+                 confirm: Iterable[str] = (), before_user: Optional[Sequence[str]] = None) -> List[str]:
+    return [e.text for e in new_message_elements(before, screen, anchor, exclude, seen, confirm, before_user)]
 
 
 def _confirmed(text: str, confirm: Sequence[str]) -> bool:
@@ -340,7 +422,7 @@ def _confirmed(text: str, confirm: Sequence[str]) -> bool:
 
 def new_message_elements(before: Sequence[str], screen: Screen, anchor: str,
                          exclude: Iterable[Optional[Element]] = (), seen: Iterable[str] = (),
-                         confirm: Iterable[str] = ()) -> List[Element]:
+                         confirm: Iterable[str] = (), before_user: Optional[Sequence[str]] = None) -> List[Element]:
     """Bot texts that appeared after the user's action.
 
     anchor: the text the user sent or the label they tapped. Its echo is found exactly (labels compared
@@ -357,12 +439,19 @@ def new_message_elements(before: Sequence[str], screen: Screen, anchor: str,
     conf = [key(t) for t in confirm]
     fresh = False
     if anchor:
-        hits = [m for m in msgs if anchor_match(screen, m, anchor)]
-        if hits:
-            low = max(hits, key=lambda m: m.y)
-            a = norm_label(anchor)
-            fresh = len(hits) > sum(1 for t in before if norm_label(t) == a)
-            msgs = [m for m in msgs if m.y > low.y + 1 and m not in hits]
+        runs = anchor_hits(screen, msgs, anchor)
+        if runs:
+            low = max((r[-1] for r in runs), key=lambda m: m.y)
+            mine = before if before_user is None else before_user  # the user's own bubbles before the action
+            n = len([ln for ln in anchor.split("\n") if ln.strip()])
+            if n <= 1:
+                old_runs = sum(1 for t in mine if norm_label(t) == norm_label(anchor))
+            else:
+                lines = [norm_label(ln) for ln in anchor.split("\n") if ln.strip()]
+                old_runs = sum(1 for i in range(len(mine) - n + 1) if [norm_label(t) for t in mine[i:i + n]] == lines)
+            fresh = len(runs) > old_runs
+            used = {m.index for r in runs for m in r}
+            msgs = [m for m in msgs if m.y > low.y + 1 and m.index not in used]
     out: List[Element] = []
     if fresh:
         floor = min((x.y for x in exclude if x is not None), default=screen.height or 1e9)
@@ -408,11 +497,21 @@ def group_options(new: List[Element], buttons: List[Element], boxes: Sequence[El
         inside = [b for b in boxes if b.index != e.index and b.contains(e) and not any(b.contains(n) for n in new[:1])]
         return min(inside, key=lambda b: b.w * b.h).index if inside else None
 
+    # Without a cell around a row: lines at the same x stacked closer than the rows are spaced.
+    pitches = [b.y - a.y for a, b in zip(cand, cand[1:]) if abs(a.x - b.x) <= 4 and b.y > a.y]
+    p_min = min(pitches) if pitches else 0.0
+
+    def stacked(prev: Element, e: Element) -> bool:
+        pitch = e.y - prev.y
+        return (prev.type == e.type == "text" and max(prev.h, e.h) <= 30 and abs(prev.x - e.x) <= 4
+                and 0 < pitch <= 1.5 * min(prev.h, e.h) and pitch <= 1.3 * p_min and len(rows[-1]) < 3)
+
     rows: List[List[Element]] = []
     for e in cand:
         box = box_of(e)
         if rows and ((box is not None and box == box_of(rows[-1][0]))
-                     or e.y < max(x.y + x.h for x in rows[-1]) - 4):
+                     or e.y < max(x.y + x.h for x in rows[-1]) - 4
+                     or (box is None and stacked(rows[-1][-1], e))):
             rows[-1].append(e)
         else:
             rows.append([e])

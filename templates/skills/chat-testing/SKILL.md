@@ -23,7 +23,9 @@ wait_for_reply()
 - **`tap_mismatch`** (`{"asked": ..., "sent": ...}`): your tap landed on another element - the app shows a
   different text as your message. That step is **invalid, not a bot result**: don't judge the reply against
   the row. `screen()`, tap the right `[index]` and continue; if it repeats, record the row `blocked` with the
-  mismatch. `skipped_hidden_copies` means invisible copies of the label were avoided - nothing to do.
+  mismatch. A submit button whose echo lists the rows you selected ("Continue" -> the chosen cards) is not
+  a mismatch. `skipped_hidden_copies` means invisible copies of the label were avoided - nothing to do;
+  `screen()` marks such copies `HIDDEN-COPY` and they are never messages or tap targets.
 - **Links / deeplinks**: when a tap opens another app (Safari, even a 404 page), `tap` returns
   `left_app: true` and brings the app back. That is the expected Simulator behaviour - if the row expects a
   link, record `success`; never report the opened page as a bug. Then `screen()`: the chat may have reset.
@@ -48,6 +50,9 @@ wait_for_reply()
 - **Selectable rows without checkboxes**: rows between the bot's question and a disabled button come back
   as `options` (`[index] name · detail`). Tap a row by its index; when no SELECTED state is exposed, the
   disabled button (e.g. Continue) becoming enabled is the sign the selection worked.
+- **`select <label> · <detail>`** (`select DEBIT MASTERCARD · 4321`): `tap(text="DEBIT MASTERCARD · 4321")` taps
+  the row whose next line or neighbour contains the detail. When a label is on screen more than once with
+  different details, `tap(text=...)` refuses with `ambiguous: [...]` - tap by `[index]` or label · detail.
 - **Positional prompts** (`tap first option`, `select second row`): count top to bottom among the options
   of the bot's latest message (`buttons`, `options`, `controls`).
 - **Rich components**: `wait_for_reply` lists `controls` (list rows, checkboxes, switches, pickers). `SELECTED`
@@ -57,7 +62,9 @@ wait_for_reply()
 - A reply identical to an earlier message: below your new message it is reported when something follows it
   (buttons) or the endpoint evidence confirms it; otherwise only the endpoint shows it (a `note` says so).
   `screen()` lists suspected `hidden_copies` of old bubbles separately.
-- `app_alerts`: in-app alerts, sheets and banners. Read them; tap their buttons only if harmless.
+- `app_alerts`: in-app alerts, sheets, banners and dialogs drawn over the chat (`kind: "dialog"` with `texts`
+  and `buttons`, e.g. "end the conversation?"). Read them; tap their buttons only if harmless or the row asks
+  for it. `send_message` refuses while a dialog covers the chat.
 - Long replies may scroll. If the reply looks cut off, `screen()`; `scroll("up")` to read earlier parts.
 
 ## Swiping, carousels, long press

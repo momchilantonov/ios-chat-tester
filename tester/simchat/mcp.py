@@ -56,7 +56,8 @@ TOOLS: List[Dict[str, Any]] = [
            "quiet_ms": _s("number", "How long the screen must be unchanged (default from config).")}),
     _tool("tap", "Tap something: a button/element by [index] from the last screen/wait_for_reply, by visible "
           "text, by accessibility id, by x/y points, or a system alert button. tap_mismatch in the result = "
-          "the app sent another label than asked: the step is invalid, not a bot result.",
+          "the app sent another label than asked: the step is invalid, not a bot result. A label shown several "
+          "times with different details is refused (ambiguous) - tap by [index] or text=\"label · detail\".",
           {"element": _s("integer", "Index from the last listing."), "text": _s("string", "Visible text/label."),
            "id": _s("string", "Accessibility identifier."), "x": _s("number", "X in points."),
            "y": _s("number", "Y in points."), "alert_button": _s("string", "Label of a system alert button.")}),

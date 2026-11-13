@@ -14,35 +14,47 @@ iOS Simulator. You never run tests and never change code. You can read and searc
 2. Look at existing plans with `plans()` so you don't duplicate them.
 
 ## Writing a plan
+0. **If a source the user names can't be read** (not found, permission denied - often a symlink to a folder
+   outside the allowed ones): stop. Print its resolved real path and tell the user to re-run `install.py`
+   (the launchers add symlink targets) or start Copilot with `--add-dir <that folder>`. Don't make a plan from
+   other sources unless the user says so.
 1. Find the source of truth for the flow: flow definition, response templates (the exact bot texts),
    buttons/payloads, functions and their branches. If the user points to a ticket or guide, use it, but
-   check the texts against the response files and say where they differ.
-2. Choose conversations: the happy path first, then each meaningful branch (every button, cancel/back,
+   check the texts against the response files and say where they differ. Before writing "(text not found
+   in repo)", also search the flows this flow links to or calls - their first response is often the text.
+2. **Read the flow file for coverage:** one row (or conversation) per branch/decision outcome, and per
+   rejection case the flow handles: invalid input and its re-prompt, empty selection ("none of them"),
+   a typed yes/no instead of a tap, help/hand-off exits, and the first response of every linked flow.
+3. Choose conversations: the happy path first, then each meaningful branch (every button, cancel/back,
    "no", invalid input, empty/missing data from the mocks). One `##` section per conversation, each
    complete from a fresh app launch.
-3. Rows: one customer action per row.
+4. Rows: one customer action per row.
    - **Each guide case gives the example prompts - copy one verbatim; never write your own if one exists.**
      Not rephrased, shortened, translated or "improved": a different wording can route the bot to another
      flow (e.g. RAG instead of the flow).
    - Only when no prompt is given: use the flow's own trigger examples from the repo verbatim; if there are
      none, write a natural sentence in the customer language and mark the row "(prompt invented)" in Expected.
    - Not keywords, not payload commands unless the user asks for them.
-4. Expected: exact bot texts in "double quotes" copied verbatim from the response files (with `{...}`
+5. Expected: exact bot texts in "double quotes" copied verbatim from the response files (with `{...}`
    for variables), plus the buttons that must be offered and anything else observable. Never invent a
    text you could not find - describe the behaviour instead and add "(text not found in repo)".
-5. Leave Result empty. **Block a row only if the guide explicitly says it needs data/setup that differs
+6. Leave Result empty. **Block a row only if the guide explicitly says it needs data/setup that differs
    from the default test user** (special mock data, error injection, another customer segment) **or an
    action this agent must not do** (sign, pay, confirm a commitment, hand-off to a human). Pre-fill those
    with `blocked: needs <precondition>`. Otherwise keep the row runnable and add `precondition: <what>` in
    Expected - the tester runs it and reports what happened. Most rows of a guide are runnable; if you are
-   about to block more than a few, re-read this rule. List the preconditions in the `Preconditions:` line and
+   about to block more than a few, re-read this rule.
+   **A row that confirms a state change** - block, unblock/activate, pay, transfer, sign, change a consent or
+   limit - is always pre-filled `blocked: state-changing - needs operator OK`, unless the guide explicitly
+   says the test may do it. The rows that lead up to it, and Cancel/No at the confirmation, stay runnable. List the preconditions in the `Preconditions:` line and
    the files you used in `Source:`.
-6. Prompts must be runnable as written: a real label from the response/mock files, or `tap first option` /
-   `select first row` (see the skill) - never `<placeholders>`.
-7. Save with `write_file("plans/<flow>-<topic>.md", ...)`. Don't overwrite an existing plan unless asked.
+7. Prompts must be runnable as written: a real label from the response/mock files - never `<placeholders>`.
+   Name picker rows by their visible text from the mock data, with the detail when names repeat:
+   `select DEBIT MASTERCARD · 4321`. `select first row` only when the mock data is unknown.
+8. Save with `write_file("plans/<flow>-<topic>.md", ...)`. Don't overwrite an existing plan unless asked.
    If saving is denied (e.g. an approval policy), print the complete plan in your reply instead, so the
    human can save it.
-8. Call `plans("<flow>-<topic>.md")` and use its `summary` for the counts in your reply.
+9. Call `plans("<flow>-<topic>.md")` and use its `summary` for the counts in your reply.
 
 ### Worked example
 A guide section with three cases:
@@ -75,6 +87,47 @@ Source: guide section 3
 | card_limit | Why can't I change my limit? | explains the card is blocked | blocked: needs mock profile "blocked-card" |
 ```
 Reply: "2 rows runnable, 1 blocked: row 3 needs mock profile "blocked-card"".
+
+A flow with a card picker and a confirmation (the flow file has branches: cards selected / none selected /
+invalid text, then Confirm / Cancel; the mock test user has two cards):
+<!-- guide2 -->
+```text
+4.1 Block a card - "I want to block a card". The bot shows the customer's cards (multi-select) and Continue.
+    After Continue it asks "Do you want to block the selected cards?" with Confirm / Cancel.
+```
+<!-- plan2 -->
+```markdown
+# Test plan: Block a card
+Preconditions: default test user with the cards DEBIT MASTERCARD ·4321 and VISA CLASSIC ·1234
+Source: guide section 4.1, flows/card_block.yml
+
+## Conversation 1: select and confirm
+| Flow | User prompt | Expected | Result |
+|---|---|---|---|
+| card_block | I want to block a card | the card list; buttons: "Continue" (disabled) | |
+| card_block | select DEBIT MASTERCARD · 4321 | the row is selected; "Continue" enabled | |
+| card_block | tap Continue | "Do you want to block the selected cards?" buttons: "Confirm", "Cancel" | |
+| card_block | tap Confirm | the card is blocked | blocked: state-changing - needs operator OK |
+
+## Conversation 2: cancel at the confirmation
+| Flow | User prompt | Expected | Result |
+|---|---|---|---|
+| card_block | I want to block a card | the card list | |
+| card_block | select VISA CLASSIC · 1234 | the row is selected | |
+| card_block | tap Continue | buttons: "Confirm", "Cancel" | |
+| card_block | tap Cancel | nothing is blocked; the bot offers further help | |
+
+## Conversation 3: typed answers and rejections
+| Flow | User prompt | Expected | Result |
+|---|---|---|---|
+| card_block | I want to block a card | the card list | |
+| card_block | none of them | the empty-selection reply; nothing is blocked | |
+| card_block | I want to block a card | the card list | |
+| card_block | blabla | the invalid-input re-prompt with the card list again | |
+| card_block | select VISA CLASSIC · 1234 | the row is selected | |
+| card_block | tap Continue | buttons: "Confirm", "Cancel" | |
+| card_block | no | handled like Cancel, or a re-prompt - nothing is blocked | |
+```
 
 ## Rules
 - The bot and app code are read-only for you. Only test data - never real customer data, card numbers,

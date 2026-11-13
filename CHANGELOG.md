@@ -2,6 +2,48 @@
 
 Newest first. After pulling: `python3 install.py` (with your usual flags), then restart both agents.
 
+## Round 6 – requirements R6-1 … R6-9 from the fifth real run
+**After pulling:** run `install.py` (it rewrites the launchers: symlinked folders in the repos are now
+readable), restart both agents. No new config keys.
+
+**A – reports something that did not happen**
+- **R6-1:** every screen read marks hidden copies: texts/buttons whose frames overlap another one's (real
+  bubbles never overlap) and that the driver reports as not hittable (cached per conversation). They are never
+  messages, anchors or tap targets; `screen()` lists them with `HIDDEN-COPY`.
+- **R6-2:** the anchor is only a bubble on the user's side - never a picker row, button or hidden copy with the
+  same text. A multi-line echo is matched as a whole.
+- **R6-3:** after a tap the whole echo bubble is read; the reply is anchored below it. `tap_mismatch` only when
+  an echo line is a *different* tappable label on screen and not a row selected since the latest reply - the
+  submit echo listing the selected cards is fine.
+
+**B – hides something that did happen**
+- **R6-4:** with evidence, the wait ends only when every paragraph of the new reply is on screen (or, for a
+  reply longer than the screen, its last part), or `render_grace_s` after the evidence arrived – then
+  `evidence_texts_missing`.
+- **R6-5:** option rows without a cell: short text lines at the same x, stacked closer than the rows are
+  spaced, form one option (`name · number`).
+- **R6-6:** a label shown several times in the latest reply with different details is refused:
+  `ambiguous: ["[i] DEBIT MASTERCARD · 4000…", ...]`. `tap(text="DEBIT MASTERCARD · 4321")` taps the row whose
+  next line or neighbour has the detail.
+
+**C – planner**
+- **R6-7:** an unreadable source stops the planner (real path + `--add-dir` hint), and the launchers now add the
+  real folders that symlinks in the repos point to. A row confirming a state change is
+  `blocked: state-changing - needs operator OK` unless the guide allows it. One row per branch and rejection
+  (invalid input, empty selection, typed yes/no, hand-off, linked flows' first responses). Picker rows by
+  visible text (`select DEBIT MASTERCARD · 4321`). Second worked example: picker + confirmation.
+
+**D – the rest**
+- **R6-8:** a dialog drawn over the chat (no composer, new texts and buttons) → `app_alerts` with
+  `kind: "dialog"`, `texts`, `buttons`; `send_message` refuses and names it; `wait_for_reply` returns on it.
+- **R6-9:** elements under the navigation bar or a top banner that don't belong to it are not listed.
+
+**Test again:**
+- R6-1 first: re-enter the card-block flow in one conversation, an invalid answer, "none of them";
+- typing a card name while the picker is shown (R6-2); select 2 cards → Continue (R6-3);
+- a 2-bubble reply (R6-4); the 8-card picker (R6-5); two "DEBIT MASTERCARD" rows (R6-6);
+- the planner on the same guide section through the symlink (R6-7); the close-chat dialog (R6-8).
+
 ## Round 5 – requirements R5-1 … R5-11 from the fourth real run
 **After pulling:** run `install.py` (it rebuilds the driver and stops the old one; `status` shows
 `driver.outdated` if an old one still runs, then `stop_driver` + `start_driver`). In `tester/config.json` set

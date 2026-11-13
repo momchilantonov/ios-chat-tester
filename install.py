@@ -288,7 +288,12 @@ class Installer:
             else:
                 self.say("  skip     VS Code user folder %s not found (use --vscode-dir)" % vscode)
         self._check_shadowing([name for name, _ in agents])
-        dirs = [str(TESTER)] + [p for _, p in sorted((self.cfg.get("repos") or {}).items())]
+        repos = [p for _, p in sorted((self.cfg.get("repos") or {}).items())]
+        dirs = [str(TESTER)] + repos
+        for target, link in _symlink_targets(repos):
+            # e.g. a repo's .github/docs linking to a docs checkout elsewhere: Copilot only reads allowed folders
+            self.say("  add-dir  %s (symlink %s)" % (target, link))
+            dirs.append(target)
         add = " ".join("--add-dir=%s" % _sh(d) for d in dirs)
         # The simchat tools only drive the Simulator, read local endpoints/logs and write under runs/ and plans/,
         # so they are pre-approved: a plan can run without a confirmation prompt for every tap.
@@ -544,6 +549,47 @@ class Installer:
             self.say("(simulators that were not booted may still have the runner app: "
                      "xcrun simctl uninstall <udid> %s)" % RUNNER_ID)
         return 0
+
+
+SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", ".build", "DerivedData", "Pods", ".tox"}
+
+
+def _inside(path, root):
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _symlink_targets(repos, depth=3):
+    """Folders outside the repos that symlinks in them point to (up to `depth` levels deep)."""
+    roots = [Path(r).expanduser().resolve() for r in repos if Path(r).expanduser().is_dir()]
+    found = []
+    for root in roots:
+        stack = [(root, 0)]
+        while stack:
+            folder, level = stack.pop()
+            try:
+                entries = sorted(os.scandir(str(folder)), key=lambda e: e.name)
+            except OSError:
+                continue
+            for entry in entries:
+                if entry.name in SKIP_DIRS:
+                    continue
+                path = Path(entry.path)
+                if entry.is_symlink():
+                    try:
+                        target = path.resolve(strict=True)
+                    except (OSError, RuntimeError):
+                        continue
+                    target = target if target.is_dir() else target.parent
+                    known = roots + [Path(t) for t, _ in found]
+                    if not any(_inside(target, k) for k in known):
+                        found.append((str(target), str(path)))
+                elif level < depth and entry.is_dir(follow_symlinks=False):
+                    stack.append((path, level + 1))
+    return found
 
 
 def _sh(text):

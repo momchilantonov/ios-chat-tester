@@ -26,7 +26,9 @@ Source: <flow files / ticket / guide section the plan was made from>
 - **One action per row** in *User prompt*:
   - plain text -> typed and sent exactly as written (write it as a real customer would, in the profile's language)
   - `tap <label>` -> tap a quick reply / row / button with that label - always a real tap, never typed
-  - `select <label>` -> tick a checkbox or list row (usually followed by a `tap <continue label>` row)
+  - `select <label>` -> tick a checkbox or list row (usually followed by a `tap <continue label>` row);
+    `select <label> · <detail>` when labels repeat (`select DEBIT MASTERCARD · 4321`: the row whose next
+    line or neighbour contains 4321)
   - `tap first option` / `select first row` / `tap last option` / `select second row` - when the concrete item
     depends on test data: counted top to bottom among the options of the bot's latest message
   - `swipe left|right on <what>` -> carousels
@@ -44,7 +46,9 @@ Source: <flow files / ticket / guide section the plan was made from>
   `blocked: <why it could not be executed>`. Rows not run end up as `blocked: not run`.
   The planner may **pre-fill** `blocked: needs <precondition>` only when the source explicitly says the row
   needs data/setup that differs from the default test user (special mock data, back-end error injection,
-  another customer segment), or an action the tester must not do (sign, pay, confirm, hand-off). The tester
+  another customer segment), or an action the tester must not do (sign, pay, confirm, hand-off). A row that
+  confirms a state change (block, unblock, pay, transfer, sign, consent) is pre-filled
+  `blocked: state-changing - needs operator OK` unless the source explicitly allows it. The tester
   skips such rows and keeps the text. Any other row stays runnable; a softer condition goes into Expected as
   `precondition: <what>`, and the tester runs the row and reports what happened.
 - No placeholders in prompts (`tap <some card>` is invalid) - use a real label from the bot's texts/mocks or

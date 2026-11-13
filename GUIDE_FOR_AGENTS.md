@@ -32,6 +32,8 @@ python3 install.py --name <agent-name> --bundle-id <bundle id> --app-repo <ios a
   over the installed one. If it is empty or stale and not tracked by that repo's git, tell the human and
   suggest removing it. Don't delete tracked files yourself.
 - If the clone lives inside another repo, add its folder to that repo's `.git/info/exclude`.
+- Symlinks in the repos (e.g. a `.github/docs` that points to a docs checkout elsewhere): the installer adds their
+  real folders to the launchers (`add-dir ... (symlink ...)` in the output). Re-run it after adding a symlink.
 - Driver build failed: see `tester/driver/.build/install-build.log` and the README's "Troubleshooting the
   driver" section.
 
