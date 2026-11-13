@@ -148,6 +148,13 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(set(json.loads((repo / ".github" / "mcp.json").read_text())["mcpServers"]), {"x", "simchat"})
         self.assertIn("simchat", json.loads((repo / ".vscode" / "mcp.json").read_text())["servers"])
 
+    def test_python_choice(self):
+        code, out = self.run_install("--bundle-id", "a.b", "--python", "/opt/py/bin/python3.11")
+        entry = json.loads((self.home / "mcp-config.json").read_text())["mcpServers"]["simchat"]
+        self.assertEqual(entry["command"], "/opt/py/bin/python3.11")
+        python, note = self.mod.pick_python()
+        self.assertTrue(python)
+
     def test_jsonc_file_is_not_rewritten(self):
         (self.vscode / "mcp.json").write_text('{ // comment\n "servers": {} }')
         code, out = self.run_install("--bundle-id", "a.b")

@@ -41,6 +41,20 @@ VSCODE_USER = Path("~/Library/Application Support/Code/User").expanduser()
 RUNNER_ID = "dev.simchat.SimDriverUITests.xctrunner"  # the test-runner app Xcode installs on the simulator
 
 
+def pick_python(requested=None):
+    """The interpreter the MCP server is registered with. Never a project virtualenv: deleting or
+    recreating that venv would silently break the tool (it needs only the standard library)."""
+    if requested:
+        return str(Path(requested).expanduser()), None
+    if sys.prefix != getattr(sys, "base_prefix", sys.prefix):  # running inside a venv
+        for cand in (getattr(sys, "_base_executable", None), "/usr/bin/python3",
+                     os.path.join(sys.base_prefix, "bin", "python3")):
+            if cand and os.path.isfile(cand) and os.access(cand, os.X_OK) and \
+                    Path(cand).resolve() != Path(sys.executable).resolve():
+                return cand, "a virtualenv is active (%s) - registering %s instead" % (sys.prefix, cand)
+    return sys.executable or "python3", None
+
+
 class Quit(Exception):
     """The user answered q."""
 
@@ -51,6 +65,7 @@ class Installer:
         self.tty = sys.stdin.isatty() if tty is None else tty
         self.guided = False
         self.dry = args.dry_run
+        self.python, self.python_note = pick_python(getattr(args, "python", None))
         self.problems = []
         self.old = self._load_manifest()
         self.manifest = {"files": {}, "json": []}
@@ -156,6 +171,8 @@ class Installer:
         self.say("  %s python %s (%s)" % ("ok  " if ok else "FAIL", platform.python_version(), sys.executable))
         if not ok:
             self.problems.append("Python 3.9+ required")
+        if self.python_note:
+            self.say("  note %s" % self.python_note)
         self.mac = platform.system() == "Darwin"
         if not self.mac:
             self.say("  warn not macOS - files are generated, the driver build is skipped")
@@ -235,7 +252,7 @@ class Installer:
                     .replace("{{REPOS}}", "\n".join(lines)))
 
     def agent_files(self):
-        python = sys.executable or "python3"
+        python = self.python
         cli_entry = {"type": "local", "command": python, "args": [str(SERVER)], "env": {}, "tools": ["*"]}
         code_entry = {"type": "stdio", "command": python, "args": [str(SERVER)]}
         agent = self.render((TEMPLATES / "agent.md").read_text(encoding="utf-8"))
@@ -397,7 +414,7 @@ class Installer:
                  "  2. run your app in the simulator (Xcode), start the local stack\n"
                  "  3. smoke test:  %s %s demo \"Hello\"\n"
                  "  4. Copilot CLI: %s/bin/%s     VS Code: Copilot Chat -> agent picker -> %s"
-                 % (TESTER, TESTER, _sh(sys.executable or "python3"), SERVER, TESTER, self.a.name, self.a.name))
+                 % (TESTER, TESTER, _sh(self.python), SERVER, TESTER, self.a.name, self.a.name))
         return 1 if self.problems else 0
 
     def uninstall(self):
@@ -499,6 +516,8 @@ def parse(argv=None):
     ap.add_argument("--guided", action="store_true", help="ask questions and confirm every step (default "
                     "when run without arguments in a terminal)")
     ap.add_argument("--yes", action="store_true", help="do not ask for confirmation")
+    ap.add_argument("--python", help="interpreter to register for the MCP server (default: this one; "
+                    "the system Python if a virtualenv is active)")
     a = ap.parse_args(argv)
     if not all(c.isalnum() or c in "-_" for c in a.name):
         ap.error("--name may contain letters, digits, - and _ only")
