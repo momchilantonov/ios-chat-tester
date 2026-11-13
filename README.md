@@ -73,8 +73,12 @@ Every test session:
    - It writes `tester/plans/<flow>-<topic>.md`. Review it, and edit it if you like: it's plain Markdown.
 5. **Run the plan** with the tester agent:
    - **Copilot CLI:** `~/tools/ios-chat-tester/tester/bin/<name>`, then `Run plan rating-thumbs`.
-     The first time, trust the folder and allow the `simchat` tools.
-   - **VS Code:** agent picker → `<name>`.
+     The first time, trust the folder. The launchers start Copilot with `--allow-tool simchat`, so it doesn't
+     ask for approval before every tap or message. Those tools only drive the Simulator, read local
+     endpoints and logs, and write under `tester/runs/` and `tester/plans/`. Other actions, such as reading
+     files outside the allowed folders, still ask. If you want to be asked every time, install with
+     `--ask-approval`.
+   - **VS Code:** agent picker → `<name>`. The first time it asks, choose "always allow" for the `simchat` tools.
    - Free-form requests work too, e.g. `Test blocking a lost card, as an impatient customer`.
 6. **Watch the Simulator** and answer the agent if it asks something, for example the session id.
 7. **Read the result:**

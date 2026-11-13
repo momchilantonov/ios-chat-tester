@@ -288,10 +288,15 @@ class Installer:
                 self.say("  skip     VS Code user folder %s not found (use --vscode-dir)" % vscode)
         dirs = [str(TESTER)] + [p for _, p in sorted((self.cfg.get("repos") or {}).items())]
         add = " ".join("--add-dir=%s" % _sh(d) for d in dirs)
+        # The simchat tools only drive the Simulator, read local endpoints/logs and write under runs/ and plans/,
+        # so they are pre-approved: a plan can run without a confirmation prompt for every tap.
+        allow = "" if self.a.ask_approval else " --allow-tool %s" % MCP_NAME
         for agent_name, _ in agents:
-            launcher = ("#!/bin/bash\n# Start the %s agent in Copilot CLI with read access to the tester and repos.\n"
+            launcher = ("#!/bin/bash\n# Start the %s agent in Copilot CLI with read access to the tester and repos%s.\n"
                         "# Run it from the folder you want as the working directory (e.g. the bot repo).\n"
-                        "exec copilot --agent=%s %s \"$@\"\n" % (agent_name, agent_name, add))
+                        "exec copilot --agent=%s%s %s \"$@\"\n"
+                        % (agent_name, "" if self.a.ask_approval else ", simchat tools pre-approved",
+                           agent_name, allow, add))
             self.write(TESTER / "bin" / agent_name, launcher, mode=0o755)
 
     def build_driver(self):
@@ -400,7 +405,8 @@ class Installer:
             "Writes the agents '%s' and '%s-planner' and %d skills into %s,"
             % (self.a.name, self.a.name, len(SKILLS), target),
             "registers the 'simchat' tool for Copilot CLI and VS Code (other entries are kept),",
-            "and writes the launcher tester/bin/%s." % self.a.name], self.agent_files)
+            "and writes the launchers tester/bin/%s and tester/bin/%s-planner" % (self.a.name, self.a.name),
+            "(they pre-approve the simchat tools, so plans run without a prompt for every tap)."], self.agent_files)
         self._step(4, "build the UI driver", [
             "Runs xcodebuild on tester/driver (1-3 minutes the first time). Offline, nothing installed globally."],
             self.build_driver)
@@ -526,6 +532,8 @@ def parse(argv=None):
     ap.add_argument("--guided", action="store_true", help="ask questions and confirm every step (default "
                     "when run without arguments in a terminal)")
     ap.add_argument("--yes", action="store_true", help="do not ask for confirmation")
+    ap.add_argument("--ask-approval", action="store_true", help="launchers do not pre-approve the simchat tools "
+                    "(Copilot asks before every tap/type)")
     ap.add_argument("--python", help="interpreter to register for the MCP server (default: this one; "
                     "the system Python if a virtualenv is active)")
     a = ap.parse_args(argv)

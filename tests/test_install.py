@@ -115,7 +115,9 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(cfg["repos"]["app"], str(self.app_repo.resolve()))
         self.assertTrue((self.clone / "tester" / "profile.md").exists())
         launcher = (self.clone / "tester" / "bin" / "my-tester").read_text()
-        self.assertIn("--agent=my-tester", launcher)
+        self.assertIn("--agent=my-tester --allow-tool simchat ", launcher)
+        planner_launcher = (self.clone / "tester" / "bin" / "my-tester-planner").read_text()
+        self.assertIn("--agent=my-tester-planner --allow-tool simchat ", planner_launcher)
         self.assertIn("--add-dir=%s" % self.app_repo.resolve(), launcher)
 
         code, out = self.run_install("--name", "my-tester")
@@ -163,6 +165,11 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(entry["command"], "/opt/py/bin/python3.11")
         python, note = self.mod.pick_python()
         self.assertTrue(python)
+
+    def test_ask_approval_keeps_prompts(self):
+        self.run_install("--bundle-id", "a.b", "--ask-approval")
+        launcher = (self.clone / "tester" / "bin" / "chat-tester").read_text()
+        self.assertNotIn("--allow-tool", launcher)
 
     def test_jsonc_file_is_not_rewritten(self):
         (self.vscode / "mcp.json").write_text('{ // comment\n "servers": {} }')
