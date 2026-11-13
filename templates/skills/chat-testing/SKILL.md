@@ -29,6 +29,13 @@ wait_for_reply()
   appear in `new_messages`/`screen()` as text. Tap them anyway: `tap(element=n)` or `tap(text="label")`.
   `send_message` refuses to type a label that is on screen and tells you which element to tap.
 - Element indexes change with every screen. Use indexes from the **latest** `wait_for_reply`/`screen`.
+- **Order**: `buttons`, `options`, `controls` and `new_messages` are in screen order (top to bottom, then left
+  to right). Judge order from that, or from the `@(x,y)` coordinates.
+- **Selectable rows without checkboxes**: rows between the bot's question and a disabled button come back
+  as `options` (`[index] name · detail`). Tap a row by its index; when no SELECTED state is exposed, the
+  disabled button (e.g. Continue) becoming enabled is the sign the selection worked.
+- **Positional prompts** (`tap first option`, `select second row`): count top to bottom among the options
+  of the bot's latest message (`buttons`, `options`, `controls`).
 - **Rich components**: `wait_for_reply` lists `controls` (list rows, checkboxes, switches, pickers). `SELECTED`
   marks the selected state and `(disabled)` marks buttons that are not usable yet. Typical: tap a row ->
   `screen()` to confirm it is SELECTED and that "Continue" is enabled -> tap "Continue" -> `wait_for_reply`.
@@ -68,11 +75,18 @@ wait_for_reply()
 - `check` evidence must be concrete: quote the bot text, name the button and payload, paste the log line.
 - `screenshot` at the key moments (first answer, each decision point, the final state, any error).
 
+## Evidence and session id
+- With `reply_evidence` configured, `wait_for_reply` reports `evidence_new_replies`, the full `evidence_texts`,
+  `evidence_flows` (which flow answered) and `evidence_options` (options the bot sent);
+  `evidence_options_missing` = sent but not drawn - check `screen()`, it may be an app/bot bug.
+- `"evidence": "off - ..."` means the endpoint isn't used for this turn - say so when a check depends on it.
+- The app leaving the foreground (a link) is reported as `left_app` by `tap` or by the next screen read.
+
 ## Session id
-`find_session_id()` searches the app log and the bot log (patterns: `session.regex` in config). One candidate
--> it is set and `fetch(endpoint)` fills `{session_id}` itself. Several -> pick the one belonging to this
-conversation (newest, appears right after your first message) and `set_session_id`. None -> follow the
-profile or ask the user. A fresh `open_app(fresh=true)` clears it - find it again after the first message.
+`send_message` looks for it automatically after the first message of a conversation (when `reply_evidence`
+needs it). `find_session_id()` searches the app log and the bot log since the last fresh launch (patterns:
+`session.regex`) and takes the newest id. None -> follow the profile or ask the user, then `set_session_id`.
+`open_app(fresh=true)` starts a new conversation and clears it.
 
 ## Checks to consider each turn
 - The reply is relevant and in the right language; no error/fallback reply (profile lists the error text).

@@ -22,6 +22,11 @@ def norm(text: str) -> str:
     return re.sub(r"\s+", " ", unicodedata.normalize("NFC", text or "")).strip().casefold()
 
 
+def norm_label(text: str) -> str:
+    """Label comparison: like norm, and iOS's trailing '.' on button labels ("Confirm.") is ignored."""
+    return norm(text).rstrip(" .")
+
+
 def exact(text: str) -> str:
     """Read-back form: NFC, whitespace collapsed, case kept."""
     return re.sub(r"\s+", " ", unicodedata.normalize("NFC", text or "")).strip()
@@ -121,8 +126,18 @@ class Screen:
 
     def carousel_texts(self) -> List[Element]:
         boxes = self.carousels()
-        return [e for e in self.visible() if e.text and e.type in TEXT_TYPES and not self.is_noise(e)
-                and self._inside_any(e, boxes)] if boxes else []
+        return sorted([e for e in self.visible() if e.text and e.type in TEXT_TYPES and not self.is_noise(e)
+                       and self._inside_any(e, boxes) and not self._covered_by_button(e)],
+                      key=lambda e: (round(e.y), e.x)) if boxes else []
+
+    def _covered_by_button(self, e: Element) -> bool:
+        """A text drawn on a button (same label, overlapping frame) is the button's caption, not content."""
+        k = norm_label(e.text)
+        for b in self.visible():
+            if b.type in BUTTON_TYPES and b.index != e.index and norm_label(b.text) == k and k:
+                if b.x < e.x + e.w and e.x < b.x + b.w and b.y < e.y + e.h and e.y < b.y + b.h:
+                    return True
+        return False
 
     @staticmethod
     def _inside_any(e: Element, boxes: Sequence[Element]) -> bool:
@@ -160,15 +175,17 @@ class Screen:
 
     def buttons(self, exclude: Iterable[Optional[Element]] = ()) -> List[Element]:
         skip = {x.index for x in exclude if x is not None}
-        return [e for e in self.visible() if e.type in BUTTON_TYPES and e.index not in skip and (e.label or e.id)
-                and not self.is_noise(e)]
+        return sorted([e for e in self.visible() if e.type in BUTTON_TYPES and e.index not in skip
+                       and (e.label or e.id) and not self.is_noise(e)],
+                      key=lambda e: (round(e.y), e.x))  # screen order, not accessibility order
 
     def controls(self, exclude: Iterable[Optional[Element]] = ()) -> List[Element]:
         """Rich components the user can operate: list rows, checkboxes, switches, pickers, selected items."""
         skip = {x.index for x in exclude if x is not None}
-        return [e for e in self.visible()
-                if (e.type in CONTROL_TYPES or e.selected) and e.type not in BUTTON_TYPES + CHROME_TYPES
-                and e.index not in skip and (e.text or e.id) and not self.is_noise(e)]
+        return sorted([e for e in self.visible()
+                       if (e.type in CONTROL_TYPES or e.selected) and e.type not in BUTTON_TYPES + CHROME_TYPES
+                       and e.index not in skip and (e.text or e.id) and not self.is_noise(e)],
+                      key=lambda e: (round(e.y), e.x))
 
     def messages(self, exclude: Iterable[Optional[Element]] = ()) -> List[Element]:
         """Text-bearing elements top to bottom, without inputs, button captions and wrapper duplicates."""
@@ -182,6 +199,7 @@ class Screen:
                  and not self._inside_any(e, excluded)          # e.g. a custom placeholder label in the composer
                  and not self._inside_any(e, self.carousels())  # carousel cards are reported separately
                  and not any(b.index != e.index and b.contains(e) for b in buttons)
+                 and not self._covered_by_button(e)
                  and not any(c.contains(e) for c in chrome)]
         out = []
         for e in cands:
@@ -202,15 +220,21 @@ class Screen:
         return False
 
     def find(self, text: str = "", ident: str = "", prefer: Sequence[str] = BUTTON_TYPES) -> List[Element]:
-        """Candidates for a tap target: exact id, exact text, then text contains. Preferred types first."""
+        """Candidates for a tap target: exact id; exact label (any element); then - only for buttons and controls
+        and only for labels longer than 4 characters or with several words - whole-word, then substring matches.
+        A chat bubble is never picked because it merely contains the text."""
         vis = self.visible()
         if ident:
             hits = [e for e in vis if e.id == ident]
         else:
-            t = norm(text)
-            hits = [e for e in vis if norm(e.label) == t or norm(e.value) == t]
-            if not hits:
-                hits = [e for e in vis if t and (t in norm(e.label) or t in norm(e.value))]
+            t = norm_label(text)
+            hits = [e for e in vis if t and (norm_label(e.label) == t or norm_label(e.value) == t)]
+            if not hits and t and (len(t) > 4 or " " in t):
+                tappable = [e for e in vis if e.type in BUTTON_TYPES + CONTROL_TYPES]
+                word = re.compile(r"(?<!\w)%s(?!\w)" % re.escape(t))
+                hits = [e for e in tappable if word.search(norm(e.label)) or word.search(norm(e.value))]
+                if not hits:
+                    hits = [e for e in tappable if t in norm(e.label) or t in norm(e.value)]
         return sorted(hits, key=lambda e: (e.type not in prefer, -e.y))
 
     def locate(self, old: Element) -> Optional[Element]:
@@ -233,6 +257,11 @@ class Screen:
 
 def new_messages(before: Sequence[str], screen: Screen, anchor: str,
                  exclude: Iterable[Optional[Element]] = (), seen: Iterable[str] = ()) -> List[str]:
+    return [e.text for e in new_message_elements(before, screen, anchor, exclude, seen)]
+
+
+def new_message_elements(before: Sequence[str], screen: Screen, anchor: str,
+                         exclude: Iterable[Optional[Element]] = (), seen: Iterable[str] = ()) -> List[Element]:
     """Bot texts that appeared after the user's action.
 
     With an anchor (the text the user sent, or the tapped quick reply) that is still visible, only texts
@@ -250,7 +279,7 @@ def new_messages(before: Sequence[str], screen: Screen, anchor: str,
             low = max(hits, key=lambda m: m.y)
             msgs = [m for m in msgs if m.y > low.y + 1]
     left = Counter(norm(t) for t in before)
-    out: List[str] = []
+    out: List[Element] = []
     for m in msgs:
         k = norm(m.text)
         if k == a or k in old:
@@ -258,6 +287,26 @@ def new_messages(before: Sequence[str], screen: Screen, anchor: str,
         if left[k] > 0:
             left[k] -= 1
             continue
-        if not out or norm(out[-1]) != k:  # the same bubble reported twice (wrapper + text)
-            out.append(m.text)
+        if not out or norm(out[-1].text) != k:  # the same bubble reported twice (wrapper + text)
+            out.append(m)
     return out
+
+
+def group_options(new: List[Element], buttons: List[Element]) -> List[List[Element]]:
+    """Selectable rows without checkboxes: texts between the bot's question (first new text) and a disabled
+    button below them (e.g. Continue). Texts on the same line form one row (name + masked number)."""
+    disabled = [b for b in buttons if not b.enabled]
+    if len(new) < 2 or not disabled:
+        return []
+    below = [b.y for b in disabled if b.y > new[0].y + new[0].h - 1]
+    if not below:
+        return []
+    limit = min(below)
+    cand = sorted([e for e in new[1:] if e.y + e.h <= limit + 1], key=lambda e: (e.y, e.x))
+    rows: List[List[Element]] = []
+    for e in cand:
+        if rows and e.y < max(x.y + x.h for x in rows[-1]) - 4:
+            rows[-1].append(e)
+        else:
+            rows.append([e])
+    return rows

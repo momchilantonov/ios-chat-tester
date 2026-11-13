@@ -20,6 +20,8 @@ BOT = {
     "debit": ("Your debit card is blocked.", []),
     "pick": ("Select the cards to block:", ["Продължи"]),
     "link": ("Read more on our website.", ["Open link"]),
+    "confirm": ("Block these cards?", ["Confirm", "Cancel"]),
+    "menu": ("What would you like to do?", ["A transfer", "B payment", "C rates", "D limits", "E other"]),
 }
 
 
@@ -35,10 +37,15 @@ class FakeApp:
         self.ghosts = False          # hidden copies of old bubbles show up in snapshots
         self.date_separator = ""     # e.g. "Днес" above the first message
         self.banner = ""             # noise element, e.g. "test message 2"
-        self.start_on_menu = False   # fresh launch shows a menu; "Remote Flow" opens the chat
+        self.start_on_menu = False   # fresh launch shows a menu; "Open chat" opens the chat
         self.prefill = ""            # text pre-filled in the composer on launch
         self.qr_as_other = False     # quick replies exposed as plain views, not buttons (common in chat SDKs)
         self.stale_y = None          # old quick replies keep reporting a position (y) after scrolling away
+        self.render_delay = 0.0      # the bot's event exists (evidence) this long before the UI draws it
+        self.switch_delay = 0.0      # "Open link" sends the app to the background only after this delay
+        self.chip_strip = False      # quick replies as buttons "X." inside a horizontal strip, captions as texts
+        self.reverse_order = False   # accessibility order of quick replies differs from screen order
+        self.rows_as_text = False    # picker rows as two text elements each, no cell/checkbox/selected state
         self.lock = threading.Lock()
         self.received = []           # what the "bot" received: {"text"} or {"payload"}
         self.commands = []
@@ -62,11 +69,15 @@ class FakeApp:
         self.menu = False            # long-press context menu
         self.swipes = []
         self.stale = []              # labels of old quick replies that still report a position
+        self.events = []             # what the bot's event export shows: (who, text, options)
+        self.drawn_at = None         # when the pending reply becomes visible
+        self.switch_at = None
         if self.welcome:
             self.messages.append(("bot", "Welcome! How can I help?"))
 
     def _user(self, text, payload=None):
         self.messages.append(("user", text))
+        self.events.append(("user", text, []))
         if self.stale_y is not None and self.buttons:
             self.stale = [b for b, _ in self.buttons]
         self.buttons = []
@@ -82,7 +93,12 @@ class FakeApp:
         self.pending = reply
 
     def _tick(self):
-        if self.pending and time.monotonic() >= self.typing_until:
+        now = time.monotonic()
+        if self.pending and now >= self.typing_until and self.drawn_at is None:
+            self.events.append(("bot", self.pending[0], list(self.pending[1])))  # the bot has answered
+            self.drawn_at = self.typing_until + self.render_delay
+        if self.pending and self.drawn_at is not None and now >= self.drawn_at:
+            self.drawn_at = None
             text, buttons = self.pending
             self.messages.append(("bot", text))
             self.buttons = [(b, b.lower()) for b in buttons]
@@ -100,7 +116,7 @@ class FakeApp:
         els = self._base()
         if self.screen == "menu":
             els += [{"type": "button", "label": "Local Flow", "id": "", "value": "", "x": 20, "y": 200, "w": 350, "h": 44},
-                    {"type": "button", "label": "Remote Flow", "id": "", "value": "", "x": 20, "y": 260, "w": 350, "h": 44}]
+                    {"type": "button", "label": "Open chat", "id": "", "value": "", "x": 20, "y": 260, "w": 350, "h": 44}]
             return self._defaults(els)
         rows = []
         if self.date_separator:
@@ -111,9 +127,12 @@ class FakeApp:
             rows.append(("carousel", None, None))
         for i in range(len(self.rows)):
             rows.append(("row", i, None))
-        for label, _ in self.buttons:
-            rows.append(("btn", label, None))
-        if self.pending:
+        if self.chip_strip and self.buttons:
+            rows.append(("strip", None, None))
+        else:
+            for label, _ in self.buttons:
+                rows.append(("btn", label, None))
+        if self.pending and self.drawn_at is None:
             rows.append(("typing", None, None))
         y = 100.0
         placed = []
@@ -141,8 +160,20 @@ class FakeApp:
                 els.append({"type": "text", "label": row[1], "id": "", "value": "", "x": 20, "y": ry + 10, "w": 150, "h": 24})
             elif kind == "row":
                 label, sel = self.rows[row[1]]
-                els.append({"type": "cell", "label": label, "id": "", "value": "", "x": 10, "y": ry, "w": 370, "h": 50,
-                            "selected": sel})
+                if self.rows_as_text:
+                    name, number = label.split(" ", 1)
+                    els.append({"type": "text", "label": name, "id": "", "value": "", "x": 20, "y": ry + 10, "w": 150, "h": 24})
+                    els.append({"type": "text", "label": number, "id": "", "value": "", "x": 200, "y": ry + 12, "w": 150, "h": 22})
+                else:
+                    els.append({"type": "cell", "label": label, "id": "", "value": "", "x": 10, "y": ry, "w": 370, "h": 50,
+                                "selected": sel})
+            elif kind == "strip":
+                els.append({"type": "collectionView", "label": "", "id": "", "value": "", "x": 0, "y": ry, "w": W, "h": 50})
+                for i, (label, _) in enumerate(self.buttons):
+                    els.append({"type": "button", "label": label + ".", "id": "qr." + label.lower(), "value": "",
+                                "x": 10 + 130 * i, "y": ry + 5, "w": 120, "h": 40})
+                    els.append({"type": "text", "label": label, "id": "", "value": "",
+                                "x": 20 + 130 * i, "y": ry + 12, "w": 100, "h": 26})
             elif kind == "carousel":
                 els.append({"type": "collectionView", "label": "", "id": "", "value": "", "x": 0, "y": ry, "w": W, "h": 55})
                 els.append({"type": "text", "label": self.carousel[self.carousel_pos], "id": "", "value": "",
@@ -170,7 +201,14 @@ class FakeApp:
                         "x": COMPOSER["x"] + 8, "y": COMPOSER["y"] + 10, "w": 120, "h": 20})
         if self.send_label:
             els.append(dict(SEND, type="button", label=self.send_label, id="", value=""))
-        return self._defaults(els)
+        return self._defaults(self._order(els))
+
+    def _order(self, els):
+        if not self.reverse_order:
+            return els
+        qr = [e for e in els if e["id"].startswith("qr.")]
+        rest = [e for e in els if not e["id"].startswith("qr.")]
+        return rest + qr[1:] + qr[:1]  # accessibility order: B, C, D, E, A
 
     @staticmethod
     def _defaults(els):
@@ -188,6 +226,8 @@ class FakeApp:
     def handle(self, cmd, args):
         with self.lock:
             self.commands.append((cmd, args))
+            if self.switch_at is not None and time.monotonic() >= self.switch_at:
+                self.state, self.switch_at = "backgroundSuspended", None
             if cmd == "ping":
                 return {"driver": "simchat", "version": 1}
             if cmd == "state":
@@ -207,7 +247,7 @@ class FakeApp:
                 x, y = float(args["x"]), float(args["y"])
                 if self.screen == "menu":
                     for e in self.elements():
-                        if e["type"] == "button" and self._hit(e, x, y) and e["label"] == "Remote Flow":
+                        if e["type"] == "button" and self._hit(e, x, y) and e["label"] == "Open chat":
                             self.screen = "chat"
                     return {}
                 if self._hit(COMPOSER, x, y):
@@ -220,6 +260,13 @@ class FakeApp:
                         text, self.value, self.cursor = self.value, "", 0
                         self._user(text)
                     return {}
+                if self.rows_as_text:
+                    for e in self.elements():
+                        if e["type"] == "text" and self._hit(e, x, y):
+                            for row in self.rows:
+                                if row[0].split(" ", 1)[0] == e["label"] or row[0].split(" ", 1)[1] == e["label"]:
+                                    row[1] = not row[1]
+                                    return {}
                 for e in self.elements():
                     if e["type"] == "cell" and self._hit(e, x, y):
                         for row in self.rows:
@@ -231,7 +278,10 @@ class FakeApp:
                             return {}
                         label = next(b for b, _ in self.buttons if "qr." + b.lower() == e["id"])
                         if label == "Open link":      # opens Safari: the app goes to the background
-                            self.state = "background"
+                            if self.switch_delay:
+                                self.switch_at = time.monotonic() + self.switch_delay
+                            else:
+                                self.state = "background"
                             return {}
                         payload = dict(self.buttons).get(label)
                         self._user(label, payload="/" + payload)

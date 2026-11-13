@@ -104,6 +104,7 @@ class LinkTest(unittest.TestCase):
         t.wait_for_reply()
         res = t.tap(text="Open link")
         self.assertTrue(res["left_app"])
-        self.assertIn("success", res["note"])
+        self.assertIn("success", res["left_app_note"])
+        self.assertTrue(res["reactivated"])
         self.assertEqual(self.s.app.state, "foreground")
         self.assertEqual(t.screen()["app_state"], "foreground")

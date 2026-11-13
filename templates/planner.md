@@ -29,9 +29,15 @@ iOS Simulator. You never run tests and never change code. You can read and searc
 4. Expected: exact bot texts in "double quotes" copied verbatim from the response files (with `{...}`
    for variables), plus the buttons that must be offered and anything else observable. Never invent a
    text you could not find - describe the behaviour instead and add "(text not found in repo)".
-5. Leave Result empty. Put preconditions the tester cannot create itself (mock data, toggles, fixtures)
-   in the `Preconditions:` line, and the files you used in `Source:`.
-6. Save with `write_file("plans/<flow>-<topic>.md", ...)`. Don't overwrite an existing plan unless asked.
+5. Leave Result empty - except rows that need a precondition the tester cannot create (special mock data,
+   error injection, another customer segment): pre-fill `blocked: needs <precondition>`. Don't turn such a
+   guide row into a normal row with a prompt that gives a different answer under the default setup.
+   Also list the preconditions in the `Preconditions:` line, and the files you used in `Source:`.
+6. Prompts must be runnable as written: a real label from the response/mock files, or `tap first option` /
+   `select first row` (see the skill) - never `<placeholders>`.
+7. Save with `write_file("plans/<flow>-<topic>.md", ...)`. Don't overwrite an existing plan unless asked.
+   If saving is denied (e.g. an approval policy), print the complete plan in your reply instead, so the
+   human can save it.
 
 ## Rules
 - The bot and app code are read-only for you. Only test data - never real customer data, card numbers,

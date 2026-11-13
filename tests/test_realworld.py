@@ -55,9 +55,9 @@ class RealWorldTest(unittest.TestCase):
 
     def test_after_launch_navigation(self):
         self.app.start_on_menu = True
-        self.s.cfg["app"]["after_launch"] = ["Remote Flow"]
+        self.s.cfg["app"]["after_launch"] = ["Open chat"]
         res = self.t.open_app(fresh=True)
-        self.assertEqual(res["navigated"], ["Remote Flow"])
+        self.assertEqual(res["navigated"], ["Open chat"])
         self.assertEqual(self.t.wait_for_reply()["new_messages"], ["Welcome! How can I help?"])
         self.s.cfg["app"]["after_launch"] = [{"tap": "Nope", "wait_s": 0.5}]
         with self.assertRaises(Exception) as ctx:
@@ -67,8 +67,9 @@ class RealWorldTest(unittest.TestCase):
     def test_selectable_rows_and_disabled_continue(self):
         self.t.send_message("pick")
         rep = self.t.wait_for_reply()
-        # rows are reported as text (what the user reads) and as controls (what the user can operate)
-        self.assertEqual(rep["new_messages"], ["Select the cards to block:", "Visa ****1111", "Mastercard ****2222"])
+        # rows between the question and the disabled Continue come back as options (and as controls)
+        self.assertEqual(rep["new_messages"], ["Select the cards to block:"])
+        self.assertEqual([o.split("] ", 1)[1] for o in rep["options"]], ["Visa ****1111", "Mastercard ****2222"])
         self.assertTrue(any("(disabled)" in b and "Продължи" in b for b in rep["buttons"]))
         rows = [c for c in rep["controls"] if "Visa" in c]
         self.assertEqual(len(rows), 1)

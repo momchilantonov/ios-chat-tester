@@ -38,7 +38,12 @@
     "endpoint": "",
     "list": "events",
     "match": {"event": "bot"},
-    "text": "text"
+    "text": "text",
+    "_options": "Optional: path to the options (quick replies) inside one bot event, and/or option_regex for markers inside its text.",
+    "options": "",
+    "option_regex": "",
+    "_flow": "Optional: path to the flow id in each event, reported as evidence_flows for every reply.",
+    "flow": ""
   },
   "app_log": {
     "_comment": "Empty = the app's own process. Or a log predicate, e.g. subsystem == \"com.example.sdk\"",
@@ -49,7 +54,10 @@
     "reply_timeout_s": 45,
     "quiet_ms": 2000,
     "poll_ms": 600,
-    "send_confirm_s": 10
+    "send_confirm_s": 10,
+    "render_grace_s": 6,
+    "app_switch_s": 2.0,
+    "session_find_s": 4
   },
   "endpoints": {
     "_comment": "Local HTTP endpoints the agent may GET for evidence. {placeholders} are filled from fetch(vars=...).",

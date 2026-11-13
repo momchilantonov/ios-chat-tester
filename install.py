@@ -269,7 +269,8 @@ class Installer:
                 self.write(base / "skills" / skill / "SKILL.md",
                            self.render((TEMPLATES / "skills" / skill / "SKILL.md").read_text(encoding="utf-8")))
             self.merge_json(base / "mcp.json", "mcpServers", cli_entry)
-            self.merge_json(repo / ".vscode" / "mcp.json", "servers", code_entry)
+            if not self.a.no_vscode:
+                self.merge_json(repo / ".vscode" / "mcp.json", "servers", code_entry)
         else:
             home = Path(self.a.copilot_home).expanduser()
             self.header("[3/4] agent, skills and MCP registration (user level: %s)" % home)
@@ -295,6 +296,9 @@ class Installer:
         for agent_name, _ in agents:
             launcher = ("#!/bin/bash\n# Start the %s agent in Copilot CLI with read access to the tester and repos%s.\n"
                         "# Run it from the folder you want as the working directory (e.g. the bot repo).\n"
+                        "for a in \"$@\"; do case \"$a\" in -p|--prompt|--prompt=*)\n"
+                        "  echo \"note: non-interactive run (-p). If your organisation's policy requires approval of MCP \" \\\n"
+                        "       \"tools, every simchat call will be denied - run interactively instead.\" >&2;; esac; done\n"
                         "exec copilot --agent=%s%s %s \"$@\"\n"
                         % (agent_name, "" if self.a.ask_approval else ", simchat tools pre-approved",
                            agent_name, allow, add))

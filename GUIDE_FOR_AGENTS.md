@@ -38,7 +38,7 @@ python3 install.py --name <agent-name> --bundle-id <bundle id> --app-repo <ios a
 | `app.bundle_id` | the app under test | Xcode → app target → General → Bundle Identifier |
 | `app.after_launch` | taps from a fresh launch to the chat, e.g. `["<menu entry>"]` | launch the app; the entry that opens the chat with the bot under test |
 | `endpoints` | local bot endpoints for evidence, e.g. `{"extract": "http://127.0.0.1:<port>/extract/{session_id}"}` | bot repo / profile; only `127.0.0.1` is allowed |
-| `reply_evidence` | `endpoint`, `list`, `match`, `text` that pick bot replies out of that endpoint's JSON | fetch one real response and look at its structure, e.g. `python3 tester/simchat_server.py fetch endpoint=extract` after `find_session_id` |
+| `reply_evidence` | `endpoint`, `list`, `match`, `text` that pick bot replies out of that endpoint's JSON; optional `options` (path to the quick replies in a bot event) or `option_regex`, and `flow` (path to the flow id in each event) | fetch one real response and look at its structure, e.g. `python3 tester/simchat_server.py fetch endpoint=extract` after `find_session_id` |
 | `logs` | bot log file(s), e.g. `{"bot": "~/chat-logs/bot.log"}` | the human starts the bot with `... 2>&1 \| tee <file>`; without it, `app_log` still works |
 | `chat.ignore_labels` | regexes for screen noise: scroll-bar labels, date separators, debug banners | `screen` output: labels that are never chat content |
 | `chat.send_labels` / `send_ids` | only if the Send button isn't found | `screen` output |
@@ -93,11 +93,18 @@ calls. Use the CLI to check the plumbing, and judge reply detection with the age
 
 **Model:** use the strongest available model (Opus-class) for both agents. Once things are stable, a
 Sonnet-class model may do for the tester: compare the results of the same plan. Avoid small or fast models.
+An organisation policy may replace the requested model with "auto", which can pick a small model. Check the
+model shown in the session and choose it explicitly with `/model`. Judge planner quality with that in mind.
 
 **Running in the background:** the driver doesn't use the real mouse or keyboard, so the human can keep
 working. Don't touch the same Simulator, don't press Run in Xcode, and keep the Mac awake during long runs
 (`caffeinate -dims`). The Simulator comes to the front once when the driver starts
 (`simulator.open_simulator_app: false` turns that off).
+
+**Timing settings** (`waits` in `config.json`):
+- `render_grace_s` (default 6): how long to wait for the screen after the endpoint already shows the reply.
+- `app_switch_s` (default 2): how long to watch for a link opening another app after each tap.
+- `session_find_s` (default 4): how long to look for the session id after the first message.
 
 ## 6. Evaluate and report back
 For each problem, report:

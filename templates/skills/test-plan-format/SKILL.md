@@ -27,6 +27,8 @@ Source: <flow files / ticket / guide section the plan was made from>
   - plain text -> typed and sent exactly as written (write it as a real customer would, in the profile's language)
   - `tap <label>` -> tap a quick reply / row / button with that label - always a real tap, never typed
   - `select <label>` -> tick a checkbox or list row (usually followed by a `tap <continue label>` row)
+  - `tap first option` / `select first row` / `tap last option` / `select second row` - when the concrete item
+    depends on test data: counted top to bottom among the options of the bot's latest message
   - `swipe left|right on <what>` -> carousels
   - `wait` -> send nothing, only wait for the next bot message
 - **Expected**
@@ -38,6 +40,11 @@ Source: <flow files / ticket / guide section the plan was made from>
 - **Links and deeplinks**: the Simulator cannot really open them. If a row expects a link/deeplink to open,
   a tap that leaves the app (Safari, another app - even with an error page) is `success`; the opened page is
   not judged. The tester brings the app back automatically.
-- **Result** (filled by the tester only): `success` · `fail: <what happened instead>` ·
+- **Result** is filled by the tester: `success` · `fail: <what happened instead>` ·
   `blocked: <why it could not be executed>`. Rows not run end up as `blocked: not run`.
+  The planner may **pre-fill** `blocked: needs <precondition>` for a row that only works with test data or a
+  setup the tester cannot create (special mock data, back-end error injection, another customer segment). The
+  tester skips such rows and keeps the text. Never write a row that can only fail as written.
+- No placeholders in prompts (`tap <some card>` is invalid) - use a real label from the bot's texts/mocks or
+  a positional form above.
 - Keep cells on one line; use `\|` for a literal pipe.
