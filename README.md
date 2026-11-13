@@ -19,46 +19,77 @@ tester/driver (XCTest UI test, runs forever) ──▶  your app in the booted S
 
 ## Install (on the Mac)
 ```bash
-git clone <this repo> ~/tools/chat-tester && cd ~/tools/chat-tester
-python3 install.py --name my-tester --bundle-id <your.app.bundle.id> \
-    --app-repo ~/path/to/ios-app-repo --bot-repo ~/path/to/bot-repo
+git clone https://github.com/momchilantonov/ios-chat-tester.git ~/tools/ios-chat-tester
+cd ~/tools/ios-chat-tester
+python3 install.py
 ```
-One command does all of this:
-1. Checks Python, Xcode, `simctl` and Copilot CLI.
-2. Creates `tester/config.json` and `tester/profile.md`. Both stay local and are git-ignored.
-3. Installs the agent and its skills into `~/.copilot/agents` and `~/.copilot/skills`.
-4. Registers the `simchat` MCP server in `~/.copilot/mcp-config.json` and VS Code's user `mcp.json`.
-5. Writes the launcher `tester/bin/<name>`.
-6. Builds the UI driver with `xcodebuild` (1–3 min the first time).
+Without arguments, the installer is **guided**:
+- It asks for the agent name, the app's bundle id, and the folders of your iOS app repo and bot repo.
+- Then it goes through 4 steps. For each one it shows what will change and waits for your OK
+  (`Y`es, `n`o to skip, `q` to quit).
 
-Use `--into <repo>` to install into `<repo>/.github` and `<repo>/.vscode` instead of your user folders.
-Use `--dry-run` to preview. After `git pull`, run it again: files it wrote earlier are updated, and files
-you edited are kept. Use `--uninstall` to remove everything it installed.
+| Step | What it does |
+|---|---|
+| 1 Prerequisites | Checks Python 3.9+, Xcode, `simctl` and Copilot CLI. Changes nothing. |
+| 2 Local settings | Creates `tester/config.json` and `tester/profile.md`. Both stay local and are git-ignored. |
+| 3 Agent and tools | Puts the agent and 2 skills into `~/.copilot/agents` and `~/.copilot/skills`, registers the `simchat` tool for Copilot CLI (`~/.copilot/mcp-config.json`) and VS Code (user `mcp.json`), and writes the launcher `tester/bin/<name>`. |
+| 4 UI driver | Builds `tester/driver` with `xcodebuild`. Takes 1–3 min the first time and works offline. |
 
-Then fill in **`tester/profile.md`**, the project-specific knowledge the agent reads first:
-- the product and the customer's language,
-- how you start the local stack,
-- where the evidence is and what the error reply looks like,
-- your rules.
+Other ways to run it:
+- Without questions: `python3 install.py --name my-tester --bundle-id <id> --app-repo <dir> --bot-repo <dir>`.
+- Preview only: add `--dry-run`.
+- Into one repo's `.github`/`.vscode` instead of your user folders: add `--into <repo>`.
+- **Update:** `git pull`, then `python3 install.py` again. Files it wrote earlier are updated; files you
+  edited by hand are kept unless you add `--force`.
 
-Also check **`tester/config.json`**: the endpoints, the log files and, if needed, the Send button label.
+## Use it: step by step
+Once, after installing:
+1. **Fill in `tester/profile.md`.** This is what the agent reads first: your product, the customer's
+   language, how you start the local stack, where the evidence is, the error reply text and your rules.
+2. **Check `tester/config.json`:**
+   - `endpoints`: the bot's local conversation/event URL.
+   - `logs`: the file your bot logs to. Start the bot with `... 2>&1 | tee <that file>`.
+   - `chat.send_labels`: only needed if your Send button isn't found.
 
-## First run: watch it work
-1. Run your app in the Simulator from Xcode and start your local backend.
-2. Smoke test without any LLM. It builds and starts the driver if needed, brings Simulator.app to the front,
-   types the message and waits for the reply:
-   ```bash
-   python3 tester/simchat_server.py demo "Hello"
-   ```
-   Single steps work too: `python3 tester/simchat_server.py screen`, `... send_message text="Hi"`,
-   `... wait_for_reply`, `... tap element=12`.
-3. Start the agent:
-   - **Copilot CLI:** `tester/bin/<name>`. It starts `copilot --agent=<name>` and uses `--add-dir` to give
-     the agent read access to the tester and your repos. Run it from your bot repo, for example.
-   - **VS Code:** Copilot Chat → agent picker → `<name>`. In *Configure Tools*, allow `simchat`.
+Every test session:
+1. **Start your local stack** (bot, mocks) the way your profile describes, logging to the file in `config.json`.
+2. **Start the app:** in Xcode press **Run (⌘R)** on a simulator, then open the chat screen.
+3. **Optional smoke test, without the agent:** `python3 tester/simchat_server.py demo "Hello"`.
+   - The first time, this starts the UI driver, which takes about 30 s.
+   - Watch the Simulator: the message is typed and sent, and the reply is printed.
+4. **Start the agent:**
+   - **Copilot CLI:** run `~/tools/ios-chat-tester/tester/bin/<name>` from your bot repo. The first time,
+     trust the folder and allow the `simchat` tools.
+   - **VS Code:** Copilot Chat → agent picker → `<name>`.
+5. **Ask for a test.** For example:
+   - `Run the example-greeting scenario`
+   - `Test blocking a lost card, as an impatient customer`
+   - `Reproduce: after tapping "X" the bot answers with the fallback`
+6. **Watch the Simulator** and answer the agent if it asks something, for example the session id.
+7. **Read the result:**
+   - The agent replies with the verdict, its findings and the report path:
+     `tester/runs/<time>_<name>/report.md`. That folder also holds the transcript, screenshots, the bot's
+     evidence (`fetch-*.json`), log slices and `journal.jsonl`.
+   - You don't need to stop anything afterwards. The driver keeps running for the next session; to stop it
+     run `python3 tester/simchat_server.py stop_driver`.
 
-   Ask it something like: *"Run the example-greeting scenario"*, *"Explore the card-blocking flow as an
-   impatient user"*, or *"Reproduce: after tapping X the bot answers with the fallback"*.
+Write your own scenarios as Markdown files in `tester/scenarios/`, using `example-greeting.md` as the
+model, or ask the agent to save an exploratory run as a scenario.
+
+## Uninstall
+```bash
+cd ~/tools/ios-chat-tester
+python3 install.py --uninstall      # shows what it will remove and asks first
+cd ~ && rm -rf ~/tools/ios-chat-tester
+```
+`--uninstall`:
+- stops the UI driver,
+- removes the driver's test-runner app from the booted simulators,
+- deletes the agent, the skills and the launcher,
+- removes the `simchat` entry from the Copilot CLI and VS Code MCP configs. Other entries stay.
+
+Files you edited by hand are kept unless you add `--force`. Deleting the folder then removes everything
+else: config, profile, runs and the driver build. Nothing was installed anywhere else.
 
 ## What the agent can and cannot do
 - It **can** read the repos you configured, drive the app through the `simchat` tools, and write reports

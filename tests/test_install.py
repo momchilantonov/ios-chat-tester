@@ -40,11 +40,51 @@ class InstallTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def run_install(self, *extra):
+    def run_install(self, *extra, answers=None, tty=False):
         lines = []
+        replies = list(answers or [])
+
+        def inp(prompt):
+            lines.append(prompt)
+            if not replies:
+                raise AssertionError("unexpected question: %s" % prompt)
+            return replies.pop(0)
+
         code = self.mod.main(["--copilot-home", str(self.home), "--vscode-dir", str(self.vscode),
-                              "--skip-build"] + list(extra), out=lines.append)
+                              "--skip-build"] + list(extra), out=lines.append, inp=inp, tty=tty)
+        self.assertEqual(replies, [], "not all answers were used")
         return code, "\n".join(lines)
+
+    def test_guided_install_confirms_each_step(self):
+        answers = ["my-tester", "com.example.App", str(self.app_repo), "", "1",
+                   "y",   # step 2 local settings
+                   "n",   # step 3 skipped
+                   "y"]   # step 4 (build skipped by flag)
+        code, out = self.run_install("--guided", answers=answers)
+        self.assertIn("Step 3 of 4", out)
+        self.assertIn("skipped", out)
+        self.assertTrue((self.clone / "tester" / "config.json").exists())
+        self.assertFalse((self.home / "agents" / "my-tester.agent.md").exists())
+        # Defaults come from the existing config on the second run; q stops cleanly.
+        code, out = self.run_install("--guided", answers=["", "", "", "", "", "y", "q"])
+        self.assertEqual(code, 1)
+        self.assertIn("[my-tester]", out)
+        self.assertIn("stopped", out)
+        self.assertFalse((self.home / "agents" / "my-tester.agent.md").exists())
+        code, out = self.run_install("--guided", answers=["", "", "", "", "", "y", "y", "y"])
+        self.assertTrue((self.home / "agents" / "my-tester.agent.md").exists())
+        self.assertTrue(json.loads((self.clone / "tester" / ".install.json").read_text())["files"])
+
+    def test_uninstall_asks_in_a_terminal(self):
+        self.run_install("--bundle-id", "a.b")
+        agent = self.home / "agents" / "chat-tester.agent.md"
+        code, out = self.run_install("--uninstall", answers=["n"], tty=True)
+        self.assertIn("nothing removed", out)
+        self.assertTrue(agent.exists())
+        code, out = self.run_install("--uninstall", answers=["y"], tty=True)
+        self.assertFalse(agent.exists())
+        self.assertFalse((self.clone / "tester" / "bin" / "chat-tester").exists())
+        self.assertIn("rm -rf", out)
 
     def test_fresh_install_rerun_and_uninstall(self):
         code, out = self.run_install("--name", "my-tester", "--bundle-id", "com.example.App",
