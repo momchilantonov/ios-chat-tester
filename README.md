@@ -17,6 +17,9 @@ tester/simchat_server.py ── send_message · wait_for_reply · tap · swipe �
 tester/driver (XCTest UI test, runs forever) ──▶  your app in the booted Simulator ──▶ your local bot/backend
 ```
 
+> **Setting this up through an AI agent?** Point it at [GUIDE_FOR_AGENTS.md](GUIDE_FOR_AGENTS.md). For what
+> changed and what to test again, see [CHANGELOG.md](CHANGELOG.md).
+
 ## Install (on the Mac)
 ```bash
 git clone https://github.com/momchilantonov/ios-chat-tester.git ~/tools/ios-chat-tester
