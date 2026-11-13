@@ -115,6 +115,16 @@ Name the tool version (`git log --oneline -1`). See `CHANGELOG.md` for what chan
 - texts in `new_messages` that are quick-reply labels, if the app doesn't expose them as buttons (the agent
   must still tap them).
 
+## Local changes and updates
+- This clone is **read-only for you**: update it with `git pull`, never push, never open pull requests from
+  this machine. Improvements reach the repository through the human's report (section 6); the maintainer
+  makes them and pushes, and you pull.
+- If you had to change a tracked file to get something working, keep it small and include it in your report
+  (`git diff`). Before the next update: `git stash && git pull && git stash pop`. If the stash conflicts,
+  prefer the pulled version and tell the human.
+- `git status` should only show nothing or your own temporary edits. Local config, profile, plans and runs are
+  git-ignored.
+
 ## Known limitations
 - Without `reply_evidence`, a reply identical to an earlier message is not detected as new.
 - The screen may show only the first part of a long message. Exact-text checks need the endpoint evidence.
