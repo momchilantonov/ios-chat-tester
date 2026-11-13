@@ -57,7 +57,7 @@ Once, after installing:
    - `logs`: the file your bot logs to. Start the bot with `... 2>&1 | tee <that file>`; the terminal output
      stays the same. Without it the agent can still read the app's own Simulator log (`app_log`).
    - `app.after_launch`: the taps from a fresh launch to the chat, if the app opens on a menu, e.g.
-     `["Remote Flow"]`.
+     `["Open chat"]`.
    - `chat.ignore_labels`: regexes for screen noise such as debug banners.
    - `chat.send_labels`: only needed if your Send button isn't found.
 
