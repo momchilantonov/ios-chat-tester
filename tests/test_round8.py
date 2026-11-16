@@ -148,6 +148,7 @@ class LauncherPathTest(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("install_link", self.link / "clone" / "install.py")
         self.h.mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.h.mod)
+        self.h.stub_simctl(self.h.mod)
 
     def tearDown(self):
         os.unlink(str(self.link))

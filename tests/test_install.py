@@ -36,6 +36,23 @@ class InstallTest(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("install_copy", self.clone / "install.py")
         self.mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.mod)
+        self.stub_simctl(self.mod)
+
+    def stub_simctl(self, mod):
+        """No test may touch the real simulator (e.g. uninstall the driver's runner app while a driver runs):
+        every `xcrun simctl` the installer runs is recorded and answered here."""
+        self.simctl_calls, self.booted = [], []
+        real = mod.Installer.run
+
+        def run(inst, cmd, timeout=30):
+            if list(cmd[:2]) == ["xcrun", "simctl"]:
+                self.simctl_calls.append(list(cmd))
+                if "list" in cmd:
+                    return 0, json.dumps({"devices": {"iOS-18": [
+                        {"udid": u, "name": "iPhone", "state": "Booted"} for u in self.booted]}})
+                return 0, ""
+            return real(inst, cmd, timeout)
+        mod.Installer.run = run
 
     def tearDown(self):
         self.tmp.cleanup()

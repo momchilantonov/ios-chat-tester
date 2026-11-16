@@ -458,10 +458,18 @@ class Tester:
             return "closed"
 
     def start_driver(self, wait_s: float = 50) -> Dict[str, Any]:
+        wait = max(1.0, min(float(wait_s), 110.0))
         try:
-            st = self.manager.ensure(wait_s=max(1.0, min(float(wait_s), 110.0)))
+            st = self.manager.ensure(wait_s=wait)
         except DriverError as exc:
-            raise ToolError(str(exc), driver=self.manager.status())
+            # right after the runner app was (re)installed, the first launch can fail: try once more
+            if "failed to launch" not in str(exc).lower():
+                raise ToolError(str(exc), driver=self.manager.status())
+            try:
+                st = self.manager.ensure(wait_s=wait)
+                st["retried"] = "the first launch failed (%s) - started again" % str(exc)[:200]
+            except DriverError as exc2:
+                raise ToolError(str(exc2), driver=self.manager.status())
         if st["phase"] != "ready":
             st["hint"] = "still starting/building - call start_driver again"
         return st
@@ -565,7 +573,8 @@ class Tester:
         once a row is selected and Continue is enabled - by the rows the latest reply offered."""
         floor = self._latest_user_y(scr)
         after = [m for m in msgs if floor is None or m.y > floor]
-        rows = group_options(after, buttons, [e for e in scr.visible() if e.type in ("cell", "other") and e.h <= 160])
+        rows = group_options(after, buttons, [e for e in scr.visible() if e.type in ("cell", "other") and e.h <= 160],
+                             scr.picker_cell(buttons))
         if rows or not self._option_rows:
             return rows
         out: List[List[Element]] = []
@@ -1189,7 +1198,8 @@ class Tester:
         acts = scr.actions([comp])
         # the question of a picker may be under the bar: it still marks where the rows start
         rows = [r for r in group_options(o["covered"] + o["real"], buttons,
-                                         [e for e in scr.visible() if e.type in ("cell", "other") and e.h <= 160])
+                                         [e for e in scr.visible() if e.type in ("cell", "other") and e.h <= 160],
+                                         scr.picker_cell(buttons))
                 if not any(scr.covered(e) for e in r)]
         in_rows = {e.index for row in rows for e in row}
         new = extra + [e.text for e in o["real"] if e.index not in in_rows]

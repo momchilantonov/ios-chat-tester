@@ -197,6 +197,11 @@ class Screen:
             return out
         return [o for o in self.elements if o.index != cell.index and cell.contains(o)]
 
+    def picker_cell(self, buttons: Sequence[Element]) -> Optional[Element]:
+        """The cell that holds the lowest disabled button (a picker's Continue) - and with it the picker rows."""
+        disabled = [b for b in buttons if not b.enabled]
+        return self.cell_of(max(disabled, key=lambda b: b.y)) if disabled else None
+
     def bot_cell(self, cell: Element) -> bool:
         """A cell with the bot's avatar (an image at the left or with "avatar" in its id), or with a button (a
         picker with its Continue, quick replies): never the user's own bubble."""
@@ -644,10 +649,18 @@ def new_message_elements(before: Sequence[str], screen: Screen, anchor: str,
     return out
 
 
-def group_options(new: List[Element], buttons: List[Element], boxes: Sequence[Element] = ()) -> List[List[Element]]:
+def group_options(new: List[Element], buttons: List[Element], boxes: Sequence[Element] = (),
+                  container: Optional[Element] = None) -> List[List[Element]]:
     """Selectable rows without checkboxes: texts between the bot's question (first new text) and a disabled
     button below them (e.g. Continue). Texts on the same line, or inside the same cell (name above a masked
-    number), form one row."""
+    number), form one row. container: the cell that holds the rows and the disabled button - then only texts
+    inside it are rows and the question is the last text above it (a "choose from the list" line before the
+    picker stays a message)."""
+    if container is not None:
+        inside = [e for e in new if container.contains(e)]
+        above = [e for e in new if not container.contains(e) and inside and e.y < inside[0].y]
+        if inside and above:
+            new = [above[-1]] + inside
     disabled = [b for b in buttons if not b.enabled]
     if len(new) < 2 or not disabled:
         return []

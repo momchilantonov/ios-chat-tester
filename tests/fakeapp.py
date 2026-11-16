@@ -35,6 +35,7 @@ BOT = {
         "Account overview", []),
 }
 BOT["anything"] = ("Anything else I can do for you? 😊", [])
+REJECT = ("Choose from the list, please.\n\nSelect the cards to block:", ["Продължи"])  # typed text at a picker
 TYPED_ROW = ("Pick one of your cards, please.", ["Продължи"])  # reply to a typed row name: the picker again
 BOT["two"] = ("The first part of the answer.\n\nThe second part of the answer.", [])
 BOT["продължи"] = ("Do you want to block the selected cards?", ["Confirm", "Cancel"])
@@ -89,6 +90,7 @@ class FakeApp:
         self.band_hidden = False
         self.echo_twins = False      # two hidden copies of the user's latest message at exactly the same frame
         self.keep_rows = False       # an answered picker's rows stay in the history (as in the real app)
+        self.reject_text = False     # other typed text while the picker is open: a line, then the picker again
         self.lock = threading.Lock()
         self.received = []           # what the "bot" received: {"text"} or {"payload"}
         self.commands = []
@@ -148,6 +150,8 @@ class FakeApp:
         reply = BOT["hello"] if key in ("hello", "здравей") else BOT.get(key)
         if reply is None and not payload and any(key == r[0].lower() for r in self.rows):
             reply = TYPED_ROW
+        elif reply is None and not payload and self.rows and self.reject_text:
+            reply = REJECT
         if reply is None:
             reply = ("Sorry, I did not understand: %s" % text, [])
         self.typing_until = time.monotonic() + self.reply_delay
@@ -173,7 +177,7 @@ class FakeApp:
                 self.messages.append(("bot", LONG_TITLE + " (panel)"))
                 self.messages.append(("bot", "Balance: 1 234 EUR"))
             self.buttons = [(b, b.lower()) for b in buttons]
-            if text.startswith("Select the cards") or text == TYPED_ROW[0]:
+            if "Select the cards" in text or text == TYPED_ROW[0]:
                 self.rows = [list(r) for r in self.pick_rows] if self.pick_rows else \
                     [["Visa ****1111", False], ["Mastercard ****2222", False]]
                 self.rows_after = len(self.messages)

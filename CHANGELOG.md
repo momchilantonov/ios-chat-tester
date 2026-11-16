@@ -2,6 +2,20 @@
 
 Newest first. After pulling: `python3 install.py` (with your usual flags), then restart both agents.
 
+## Round 10 – requirements R10-1, R10-2 from the ninth real run (verdict: ready for unattended runs)
+**After pulling:** run `install.py`, restart both agents. Driver unchanged (version 3). No new config keys.
+
+- **R10-1:** every command `install.py` runs goes through `Installer.run` (also the simulator listing and the
+  runner-app uninstall), and the installer tests answer every `xcrun simctl` themselves - running the unit tests
+  no longer removes the driver's runner app from the real simulator. `start_driver` retries once by itself when
+  the first launch fails with "failed to launch" (result: `retried`).
+- **R10-2:** picker rows are only the texts in the cell that holds the disabled Continue; the question is the
+  last text above that cell. After a rejected typed text ("choose from the list" + the picker again) the caption
+  stays in `new_messages` and `options` has only the rows - as for the first picker.
+
+**Test again:** `python3 -m unittest discover -s tests` while the driver runs (it keeps running); a typed text
+at the picker, then `options` and `screen()["options"]`.
+
 ## Round 9 – requirements R9-1 … R9-5 from the eighth real run
 **After pulling:** run `install.py`, restart both agents. Driver unchanged (version 3). No new config keys.
 

@@ -159,6 +159,14 @@ class Installer:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
+    @staticmethod
+    def _is_mac():
+        return platform.system() == "Darwin"
+
+    def _sim_runner(self, cmd, timeout=60):
+        code, out = self.run(cmd, timeout=timeout)
+        return subprocess.CompletedProcess(cmd, code, out, "" if code == 0 else out)
+
     def run(self, cmd, timeout=30):
         try:
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -484,8 +492,7 @@ class Installer:
     def _stop_driver(self):
         """Stop this clone's driver in a separate process: importing simchat here could pick up another copy's
         module (e.g. inside the unit tests) and stop a driver that belongs to someone else."""
-        subprocess.run([self.python, str(SERVER), "stop_driver"], cwd=str(TESTER), capture_output=True,
-                       timeout=60, check=False)
+        self.run([self.python, str(SERVER), "stop_driver"], timeout=60)
 
     def _restart_hint(self):
         """A driver started before this update keeps running the old build: stop it (only our own process),
@@ -499,7 +506,7 @@ class Installer:
             self.say("  stop     the UI driver process")
             if not self.dry:
                 self._stop_driver()
-        if platform.system() != "Darwin":
+        if not self._is_mac():
             return
         sys.path.insert(0, str(TESTER))
         try:
@@ -508,7 +515,7 @@ class Installer:
         except ImportError as exc:
             self.say("  skip     driver cleanup (%s)" % exc)
             return
-        sim = Simulator(load_config())
+        sim = Simulator(load_config(), runner=self._sim_runner)  # every command goes through self.run
         try:
             booted = sim.booted()
         except DriverError:
