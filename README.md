@@ -20,32 +20,167 @@ tester/driver (XCTest UI test, runs forever) ──▶  your app in the booted S
 > **Setting this up through an AI agent?** Point it at [GUIDE_FOR_AGENTS.md](GUIDE_FOR_AGENTS.md). For what
 > changed and what to test again, see [CHANGELOG.md](CHANGELOG.md).
 
-## Install (on the Mac)
-```bash
-git clone https://github.com/momchilantonov/ios-chat-tester.git ~/tools/ios-chat-tester
-cd ~/tools/ios-chat-tester
-python3 install.py
-```
-Without arguments, the installer is **guided**:
-- It asks for the agent name, the app's bundle id, and the folders of your iOS app repo and bot repo.
-- Then it goes through 4 steps. For each one it shows what will change and waits for your OK
-  (`Y`es, `n`o to skip, `q` to quit).
+## Install, update, move, uninstall
+Everything is done with one script, `install.py`, on the Mac where Xcode and the Simulator run.
+
+**You need:** macOS with Xcode (your app builds and runs in the Simulator), Python 3.9+ (`python3 --version`),
+and GitHub Copilot CLI and/or VS Code with Copilot.
+
+### First: choose where the agents go
+The tool itself always lives in the folder you clone. Only the agent files (2 agents, 3 skills and the
+`simchat` tool registration) go to one of two places:
+
+| | **A. For your user** (default) | **B. Into one repo** (`--into <repo>`) |
+|---|---|---|
+| Files go to | `~/.copilot/agents`, `~/.copilot/skills`, `~/.copilot/mcp-config.json`, VS Code's user `mcp.json` | `<repo>/.github/agents`, `<repo>/.github/skills`, `<repo>/.github/mcp.json`, `<repo>/.vscode/mcp.json` |
+| The agents show up | in Copilot started from **any** folder | only in Copilot started **inside that repo** (or VS Code with that repo open) |
+| Good when | you test from several repos | you keep your AI tools in one repo (e.g. the bot repo) |
+
+Pick one. You can switch later (case 4).
+
+### Case 1: install for your user (A)
+1. Clone the tool anywhere, for example:
+   ```bash
+   git clone https://github.com/momchilantonov/ios-chat-tester.git ~/tools/ios-chat-tester
+   cd ~/tools/ios-chat-tester
+   ```
+2. Run the installer and answer its questions (agent name, app bundle id, app repo folder, bot repo folder):
+   ```bash
+   python3 install.py
+   ```
+   Or give everything at once, without questions:
+   ```bash
+   python3 install.py --name my-tester --bundle-id <bundle id> --app-repo <ios app repo> --bot-repo <bot repo>
+   ```
+3. Read the end of the output: `Done.`, or a short list of things to fix.
+4. Continue with [Use it: step by step](#use-it-step-by-step).
+
+### Case 2: install into one repo (B)
+1. Clone the tool. It can live inside that repo, for example in its `.github` folder:
+   ```bash
+   cd <bot repo>/.github
+   git clone https://github.com/momchilantonov/ios-chat-tester.git
+   cd ios-chat-tester
+   ```
+2. Run the installer with `--into` and the repo's folder:
+   ```bash
+   python3 install.py --into <bot repo> --name my-tester --bundle-id <bundle id> \
+       --app-repo <ios app repo> --bot-repo <bot repo>
+   ```
+3. Keep the new files out of that repo's git. They contain paths from your machine, so don't commit them.
+   Add these lines to `<bot repo>/.git/info/exclude` (a local `.gitignore` that is never committed):
+   ```text
+   .github/ios-chat-tester/
+   .github/agents/my-tester.agent.md
+   .github/agents/my-tester-planner.agent.md
+   .github/skills/chat-testing/
+   .github/skills/chat-test-report/
+   .github/skills/test-plan-format/
+   ```
+   `.github/mcp.json` and `.vscode/mcp.json` may already be tracked in the repo. The installer only adds a
+   `simchat` entry to them, so `git status` will show them as changed: don't commit that change. Add
+   `--no-vscode` if you don't want `.vscode/mcp.json` touched at all.
+4. Always start the agents from **inside that repo**, e.g. `cd <bot repo> && <clone>/tester/bin/my-tester`.
+
+### What the installer does (cases 1 and 2)
+In guided mode it shows each step and waits for your OK (`Y`es, `n`o to skip, `q` to quit).
 
 | Step | What it does |
 |---|---|
 | 1 Prerequisites | Checks Python 3.9+, Xcode, `simctl` and Copilot CLI. Changes nothing. |
-| 2 Local settings | Creates `tester/config.json` and `tester/profile.md`. Both stay local and are git-ignored. |
-| 3 Agent and tools | Puts the agent and 2 skills into `~/.copilot/agents` and `~/.copilot/skills`, registers the `simchat` tool for Copilot CLI (`~/.copilot/mcp-config.json`) and VS Code (user `mcp.json`), and writes the launcher `tester/bin/<name>`. |
+| 2 Local settings | Creates `tester/config.json` and `tester/profile.md` in the clone. Both stay local and are git-ignored. |
+| 3 Agents and tools | Writes the 2 agents and 3 skills to the place you chose (A or B), registers the `simchat` tool there, and writes the launchers `tester/bin/<name>` and `tester/bin/<name>-planner`. |
 | 4 UI driver | Builds `tester/driver` with `xcodebuild`. Takes 1–3 min the first time and works offline. |
 
-Other ways to run it:
-- Without questions: `python3 install.py --name my-tester --bundle-id <id> --app-repo <dir> --bot-repo <dir>`.
-- Preview only: add `--dry-run`.
-- Into one repo's `.github`/`.vscode` instead of your user folders: add `--into <repo>`.
-- Cloned inside another repo (e.g. the bot repo's `.github/`)? That works. Add the folder to that repo's
-  `.git/info/exclude` so it never shows up in its `git status` or gets committed there.
-- **Update:** `git pull`, then `python3 install.py` again. Files it wrote earlier are updated; files you
-  edited by hand are kept unless you add `--force`.
+### Case 3: update to a new version
+1. `cd` into the clone and run `git pull`.
+2. Run **exactly the same install command as the first time**: the same `--name`, and `--into <repo>` if
+   you used it. Without `--into`, the update goes to your user folders instead (place A) and you end up with
+   two installs. Without `--name`, the name falls back to `chat-tester`.
+3. Restart the agents: a running Copilot session keeps the old instructions.
+4. Read the newest section of [CHANGELOG.md](CHANGELOG.md): it lists new settings and what to test again.
+
+Files the installer wrote earlier are updated. Files you edited by hand are kept and reported as `KEPT`;
+`--force` overwrites them.
+
+### Case 4: move the agents (A → B, B → A, or to another repo)
+A new install in another place does **not** remove the old one. Remove it first:
+1. Stop any agent session that uses the tool.
+2. Remove the current install. Your config, profile, plans and runs stay:
+   ```bash
+   python3 install.py --uninstall
+   ```
+3. Install in the new place, with the same `--name`:
+   ```bash
+   python3 install.py --name my-tester                      # → A, for your user
+   python3 install.py --name my-tester --into <repo>        # → B, into that repo
+   ```
+   The bundle id and repo folders come from `tester/config.json`, so you don't need to repeat them.
+4. If you moved away from a repo (B), remove the lines you added to its `.git/info/exclude`.
+
+### Case 5: rename the agents
+Same as case 4: `python3 install.py --uninstall`, then install again with the new `--name`.
+
+### Case 6: move the tool folder itself
+The launchers and the tool registration contain the folder's path. Uninstall in the old folder, move or
+re-clone it, then install from the new folder (case 1 or 2). To keep your settings, copy `tester/config.json`,
+`tester/profile.md`, `tester/plans/` and `tester/runs/` to the new folder before installing.
+
+### Case 7: uninstall completely
+1. Preview what will be removed:
+   ```bash
+   cd <clone>
+   python3 install.py --uninstall --dry-run
+   ```
+2. Remove it. It shows the list again and asks before removing anything:
+   ```bash
+   python3 install.py --uninstall
+   ```
+   This:
+   - stops the UI driver;
+   - removes the driver's test-runner app from the booted simulators;
+   - deletes the agents, the skills and the launchers from **every place you ever installed to** (A and B);
+   - removes the `simchat` entry from each MCP config file. Other entries stay; a file that only had this
+     entry stays, with an empty list.
+
+   Files you edited by hand are kept; add `--force` to remove them too.
+3. Delete the folder. This removes the rest: config, profile, plans, runs and the driver build.
+   ```bash
+   cd ~ && rm -rf <clone>
+   ```
+4. If you used B, remove the lines you added to that repo's `.git/info/exclude`.
+
+Simulators that were not running during the uninstall may still have the runner app:
+`xcrun simctl uninstall <udid> dev.simchat.SimDriverUITests.xctrunner`.
+
+### All installer options
+| Option | Meaning |
+|---|---|
+| *(none, in a terminal)* | Guided: asks the questions, shows each step, waits for your OK. Same as `--guided`. |
+| `--name NAME` | Agent name (default `chat-tester`). The planner is `NAME-planner`. Letters, digits, `-` and `_`. |
+| `--bundle-id ID` | Bundle id of the app under test (Xcode → app target → General). |
+| `--app-repo DIR` / `--bot-repo DIR` | Repos the agents may read. Saved in `tester/config.json`. |
+| `--repo ROLE=DIR` | One more readable repo; repeat for more. |
+| `--into REPO` | Install into that repo's `.github` and `.vscode` (place B) instead of your user folders. |
+| `--copilot-home DIR` | Your Copilot folder for place A (default `~/.copilot` or `$COPILOT_HOME`). |
+| `--vscode-dir DIR` | VS Code's user folder (default `~/Library/Application Support/Code/User`). |
+| `--no-vscode` | Don't register the tool for VS Code. |
+| `--python PATH` | The Python that runs the tool (default: the one you start `install.py` with; never a virtualenv). |
+| `--ask-approval` | Copilot asks before every tap or message (by default the `simchat` tools are pre-approved). |
+| `--skip-build` | Don't build the UI driver. |
+| `--dry-run` | Show what would happen; change nothing. Works with `--uninstall` too. |
+| `--yes` | Don't ask for confirmation. |
+| `--force` | Also overwrite or remove files you edited by hand. |
+| `--uninstall` | Remove what the installer put in place (case 7). |
+
+### Good to know
+- **Two installs at once** (A and B): the agents appear twice inside that repo, and an update to one place
+  leaves the other on the old version. Use one place, or update both with their own commands.
+- **The installer remembers what it wrote** (in `tester/.install.json`). That is how updates and uninstall find
+  their files, and why it never overwrites or deletes a file you changed without `--force`.
+- **An agent file with the same name already in a repo** (e.g. `.github/agents/my-tester.agent.md`) can hide
+  the installed agent there. The installer warns about it (`WARN ... exists`); remove it or use another
+  `--name`.
 
 ## Use it: step by step
 Once, after installing:
@@ -113,21 +248,6 @@ Source: <flow file>
 - **Result:** left empty in the plan; the tester fills it.
 
 Full rules: [tester/plans/README.md](tester/plans/README.md). Your plans and results are git-ignored.
-
-## Uninstall
-```bash
-cd ~/tools/ios-chat-tester
-python3 install.py --uninstall      # shows what it will remove and asks first
-cd ~ && rm -rf ~/tools/ios-chat-tester
-```
-`--uninstall`:
-- stops the UI driver,
-- removes the driver's test-runner app from the booted simulators,
-- deletes the agent, the skills and the launcher,
-- removes the `simchat` entry from the Copilot CLI and VS Code MCP configs. Other entries stay.
-
-Files you edited by hand are kept unless you add `--force`. Deleting the folder then removes everything
-else: config, profile, runs and the driver build. Nothing was installed anywhere else.
 
 ## What the agent can and cannot do
 - It **can** read the repos you configured, drive the app through the `simchat` tools, and write reports
