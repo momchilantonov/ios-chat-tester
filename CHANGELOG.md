@@ -2,6 +2,15 @@
 
 Newest first. After pulling: `python3 install.py` (with your usual flags), then restart both agents.
 
+## README: a step-by-step user guide
+**After pulling:** nothing to do. No code changes.
+
+- The README is now a guide for people who haven't used the tool: how it works, quick start, the install cases
+  (1, 2, 2b), the one-time config and profile, starting the agents in every way (launchers, plain `copilot`,
+  VS Code), example prompts for the planner and the tester, the plan format, every file a run writes and how
+  to read results and verdicts, the command line without an agent, update/move/rename/uninstall, options and
+  troubleshooting. All examples use placeholders.
+
 ## Uninstall: links to removed files, and an MCP file it created
 From the first check of the main repo + submodule layout (two small gaps).
 **After pulling:** nothing to do. Driver unchanged (version 3). No new config keys.
