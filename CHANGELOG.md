@@ -2,6 +2,54 @@
 
 Newest first. After pulling: `python3 install.py` (with your usual flags), then restart both agents.
 
+## Round 7 – requirements R7-1 … R7-7 from the sixth real run
+**After pulling:** run `install.py` (it rebuilds the driver - version 3 - and rewrites the launchers), restart
+both agents. If `status` shows `driver.outdated`: `stop_driver`, then `start_driver`. No new config keys.
+
+**A – reports something that did not happen**
+- **R7-1:** the user's echo is found also under the navigation bar or a top banner (lists scroll it there after
+  a send/tap); those elements are still never reported as messages. "User side" = the bubble (or a tight
+  wrapper) ends within 32pt of the right screen edge - a picker row right of the middle is no anchor. The
+  user's old bubbles are counted only if they are still on screen (the scroll since the action is measured), so
+  re-entering a flow with the same prompt anchors on the new echo. New reply texts under the bar/banner are read
+  by scrolling up (as for long replies); what still can't be read comes back as `under_bar` and is missing in
+  the evidence check.
+- **R7-2:** a text inside any button frame - also a hidden copy or one under a bar - is a caption, never a
+  message. A new bubble on the user's side that shows the selected rows (the submit echo) counts as the echo
+  even when the anchor isn't found: everything above it is old.
+- **R7-3:** cause found: the driver's `hittable` looked only at the first 12 copies of a label, and a closing
+  line like "Anything else I can do for you?" has more. Now the tool sends the frames it needs and the driver
+  (version 3) looks through all copies, binding only the wanted ones. Unresolved frames are cached.
+
+**B – hides something that did happen**
+- **R7-4:** an open dialog stays a dialog after `wait_for_reply` reported it: `screen()` lists it in
+  `app_alerts` (texts not in `messages`), and `send_message` refuses with its text and buttons and says to tap.
+
+**C – planner**
+- **R7-5:** picker rows always by visible text (no `select first row`); a disabled control is never a step
+  (an empty selection is typed, e.g. "none of them"); every picker/chip step gets a re-entry row and a typed-option
+  row. New plan form `type: <text>` = typed even if it is an option label (`allow_button_text=true`).
+  `plans(name)` returns `warnings` for positional rows, disabled steps and missing branches; the planner fixes
+  them before it replies.
+
+**D – the rest**
+- **R7-6:** disabled buttons above the user's latest bubble (an answered Continue) move from `buttons` to
+  `stale_buttons` (in `wait_for_reply` and `screen()`). `screen()` lists picker rows under `options`, not
+  `messages`. An ignored banner (`chat.ignore_labels`) is no `app_alert`.
+- **R7-7:** the launchers pass the MCP config themselves (`--additional-mcp-config=@tester/bin/mcp-config.json`),
+  and `-p` prints one line: it fails if MCP tools need interactive approval - run without `-p`.
+
+**Changed tests:** two Round 5 fixtures (`test_echo_matches_label_with_ios_dot`,
+`test_trailing_copy_of_an_old_bubble_is_not_new`) had a "user bubble" ending 40pt before the right edge. Under
+R7-1 that is not a user bubble, so the fixtures now end 20pt from the edge; the assertions are unchanged.
+
+**Test again:**
+- R7-1 first: re-enter the card-block flow after Cancel; type a card name while the picker is shown;
+- select 2 cards → Continue (R7-2): only the confirm question, no caption, no history;
+- `screen()` after a few flows: the ghost of the closing line is `HIDDEN-COPY` (R7-3);
+- Close → `wait_for_reply` → `screen()` → `send_message` (R7-4); the planner on the same section (R7-5);
+- `bin/<name> -p "..."` from the bot repo (R7-7).
+
 ## Round 6 – requirements R6-1 … R6-9 from the fifth real run
 **After pulling:** run `install.py` (it rewrites the launchers: symlinked folders in the repos are now
 readable), restart both agents. No new config keys.

@@ -25,6 +25,10 @@ iOS Simulator. You never run tests and never change code. You can read and searc
 2. **Read the flow file for coverage:** one row (or conversation) per branch/decision outcome, and per
    rejection case the flow handles: invalid input and its re-prompt, empty selection ("none of them"),
    a typed yes/no instead of a tap, help/hand-off exits, and the first response of every linked flow.
+   **Every picker or chip step also gets these two standard branches:**
+   - *re-entry* - after the flow finished or was cancelled, the start prompt again in the same conversation
+     (the flow must start again, not answer from the old context);
+   - *typed option* - the visible text of an option typed instead of tapped: `type: VISA CLASSIC`.
 3. Choose conversations: the happy path first, then each meaningful branch (every button, cancel/back,
    "no", invalid input, empty/missing data from the mocks). One `##` section per conversation, each
    complete from a fresh app launch.
@@ -49,12 +53,17 @@ iOS Simulator. You never run tests and never change code. You can read and searc
    says the test may do it. The rows that lead up to it, and Cancel/No at the confirmation, stay runnable. List the preconditions in the `Preconditions:` line and
    the files you used in `Source:`.
 7. Prompts must be runnable as written: a real label from the response/mock files - never `<placeholders>`.
-   Name picker rows by their visible text from the mock data, with the detail when names repeat:
-   `select DEBIT MASTERCARD · 4321`. `select first row` only when the mock data is unknown.
+   Name picker rows **always** by their visible text from the mock data, with the detail when names repeat:
+   `select DEBIT MASTERCARD · 4321` - never `select first row`. If you can't find the labels, write the label
+   you expect, add "(label not found in mocks)" to Expected and list it under open questions.
+   **A disabled control is never a step**: a Continue that is disabled until something is selected can't be
+   tapped with an empty selection. An empty selection is reached by typing (e.g. "none of them").
 8. Save with `write_file("plans/<flow>-<topic>.md", ...)`. Don't overwrite an existing plan unless asked.
    If saving is denied (e.g. an approval policy), print the complete plan in your reply instead, so the
    human can save it.
-9. Call `plans("<flow>-<topic>.md")` and use its `summary` for the counts in your reply.
+9. Call `plans("<flow>-<topic>.md")`. Fix every item in its `warnings` (positional rows, a disabled control as a
+   step, a picker without the re-entry or typed-option branch) and save again; then use its `summary` for the
+   counts in your reply.
 
 ### Worked example
 A guide section with three cases:
@@ -116,6 +125,7 @@ Source: guide section 4.1, flows/card_block.yml
 | card_block | select VISA CLASSIC · 1234 | the row is selected | |
 | card_block | tap Continue | buttons: "Confirm", "Cancel" | |
 | card_block | tap Cancel | nothing is blocked; the bot offers further help | |
+| card_block | I want to block a card | the card list again (re-entry after Cancel) | |
 
 ## Conversation 3: typed answers and rejections
 | Flow | User prompt | Expected | Result |
@@ -124,6 +134,7 @@ Source: guide section 4.1, flows/card_block.yml
 | card_block | none of them | the empty-selection reply; nothing is blocked | |
 | card_block | I want to block a card | the card list | |
 | card_block | blabla | the invalid-input re-prompt with the card list again | |
+| card_block | type: VISA CLASSIC | the flow's answer to a typed card name (from the flow file) | |
 | card_block | select VISA CLASSIC · 1234 | the row is selected | |
 | card_block | tap Continue | buttons: "Confirm", "Cancel" | |
 | card_block | no | handled like Cancel, or a re-prompt - nothing is blocked | |

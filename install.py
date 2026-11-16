@@ -298,15 +298,20 @@ class Installer:
         # The simchat tools only drive the Simulator, read local endpoints/logs and write under runs/ and plans/,
         # so they are pre-approved: a plan can run without a confirmation prompt for every tap.
         allow = "" if self.a.ask_approval else " --allow-tool %s" % MCP_NAME
+        # The launcher brings its own MCP config: Copilot skips the workspace/user config in some folders (e.g. an
+        # untrusted folder with -p), and the agent then wrongly says the simchat tools are not available.
+        mcp_file = TESTER / "bin" / "mcp-config.json"
+        self.write(mcp_file, json.dumps({"mcpServers": {MCP_NAME: cli_entry}}, indent=2) + "\n")
+        mcp = " --additional-mcp-config=@%s" % _sh(str(mcp_file))
         for agent_name, _ in agents:
             launcher = ("#!/bin/bash\n# Start the %s agent in Copilot CLI with read access to the tester and repos%s.\n"
                         "# Run it from the folder you want as the working directory (e.g. the bot repo).\n"
                         "for a in \"$@\"; do case \"$a\" in -p|--prompt|--prompt=*)\n"
-                        "  echo \"note: non-interactive run (-p). If your organisation's policy requires approval of MCP \" \\\n"
-                        "       \"tools, every simchat call will be denied - run interactively instead.\" >&2;; esac; done\n"
-                        "exec copilot --agent=%s%s %s \"$@\"\n"
+                        "  echo \"note: non-interactive run (-p) - if MCP tools need interactive approval here (organisation \"\\\n"
+                        "\"policy), every simchat call is denied: run without -p.\" >&2;; esac; done\n"
+                        "exec copilot --agent=%s%s%s %s \"$@\"\n"
                         % (agent_name, "" if self.a.ask_approval else ", simchat tools pre-approved",
-                           agent_name, allow, add))
+                           agent_name, allow, mcp, add))
             self.write(TESTER / "bin" / agent_name, launcher, mode=0o755)
 
     def _check_shadowing(self, names):

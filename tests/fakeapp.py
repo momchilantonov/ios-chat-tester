@@ -34,6 +34,8 @@ BOT = {
     "show me the details of my current account balance": (
         "Account overview", []),
 }
+BOT["anything"] = ("Anything else I can do for you? 😊", [])
+TYPED_ROW = ("Pick one of your cards, please.", ["Продължи"])  # reply to a typed row name: the picker again
 BOT["two"] = ("The first part of the answer.\n\nThe second part of the answer.", [])
 BOT["продължи"] = ("Do you want to block the selected cards?", ["Confirm", "Cancel"])
 LONG_TITLE = "Show me the details of my curr"  # first 30 characters of the long option
@@ -74,6 +76,11 @@ class FakeApp:
         self.pick_rows = None        # rows the card picker shows (default: two cards)
         self.dialog = False          # an "end the conversation?" dialog covers the chat (no composer)
         self.nav_ghost = False       # an old disabled "Continue" left under the navigation bar
+        self.echo_top = None         # after the user's message the list scrolls it to this y (under the nav bar)
+        self.rows_right = False      # picker rows as one text each, right of the middle (not right-aligned)
+        self.nav_caption = False     # after a submit: a hidden copy of the submit button + its caption near the bar
+        self.offscreen_copies = 0    # every bubble also has this many copies far above the screen (tree order first)
+        self.answered_buttons = False  # answered quick replies stay in the history as disabled buttons
         self.lock = threading.Lock()
         self.received = []           # what the "bot" received: {"text"} or {"payload"}
         self.commands = []
@@ -105,10 +112,13 @@ class FakeApp:
         self.late = []               # bubbles still to be drawn, and when
         self.late_at = 0.0
         self.actions = []            # full-width action rows ("New transfer ›")
+        self._nav_caption_on = False
         if self.welcome:
             self.messages.append(("bot", "Welcome! How can I help?"))
 
     def _user(self, text, payload=None):
+        if self.answered_buttons:
+            self.messages.extend(("oldbtn", b) for b, _ in self.buttons)
         self.messages.append(("user", text))
         self.events.append(("user", text, []))
         if self.stale_y is not None and self.buttons:
@@ -124,6 +134,8 @@ class FakeApp:
             self.messages.append(("bot", self.interim))
         key = (payload or text).strip().lower().lstrip("/")
         reply = BOT["hello"] if key in ("hello", "здравей") else BOT.get(key)
+        if reply is None and not payload and any(key == r[0].lower() for r in self.rows):
+            reply = TYPED_ROW
         if reply is None:
             reply = ("Sorry, I did not understand: %s" % text, [])
         self.typing_until = time.monotonic() + self.reply_delay
@@ -149,7 +161,7 @@ class FakeApp:
                 self.messages.append(("bot", LONG_TITLE + " (panel)"))
                 self.messages.append(("bot", "Balance: 1 234 EUR"))
             self.buttons = [(b, b.lower()) for b in buttons]
-            if text.startswith("Select the cards"):
+            if text.startswith("Select the cards") or text == TYPED_ROW[0]:
                 self.rows = [list(r) for r in self.pick_rows] if self.pick_rows else \
                     [["Visa ****1111", False], ["Mastercard ****2222", False]]
                 self.rows_after = len(self.messages)
@@ -205,6 +217,9 @@ class FakeApp:
             y += 210 if row[0] == "msg" and len(row[2]) > 80 else \
                 (24 * len(row[2].split("\n")) + 20) if row[0] == "msg" and "\n" in row[2] else 60
         shift = max(0.0, y - 740)  # chat sticks to the bottom; old rows scroll off the top
+        users = [ry for row, ry in placed if row[0] == "msg" and row[1] == "user"]
+        if self.echo_top is not None and users:  # the app scrolls the user's latest bubble to the top
+            shift = max(shift, users[-1] - self.echo_top)
         self.offset = max(0.0, min(self.offset, shift))
         for row, ry in placed:
             ry -= shift - self.offset
@@ -216,6 +231,11 @@ class FakeApp:
                 for j, line in enumerate(lines):
                     els.append({"type": "text", "label": line, "id": "", "value": "", "x": 160, "y": ry + 5 + 24 * j,
                                 "w": 200, "h": 20})
+            elif kind == "msg" and row[1] == "oldbtn":
+                els.append({"type": "button", "label": row[2], "id": "", "value": "", "x": 10, "y": ry, "w": 200,
+                            "h": 44, "enabled": False})
+                els.append({"type": "text", "label": row[2], "id": "", "value": "", "x": 20, "y": ry + 10, "w": 150,
+                            "h": 24})
             elif kind == "msg":
                 x = 150 if row[1] == "user" else 10
                 h = 200 if len(row[2]) > 80 else 50
@@ -239,7 +259,10 @@ class FakeApp:
                 els.append({"type": "text", "label": row[1], "id": "", "value": "", "x": 20, "y": ry + 10, "w": 150, "h": 24})
             elif kind == "row":
                 label, sel = self.rows[row[1]]
-                if self.rows_stacked:
+                if self.rows_right:
+                    els.append({"type": "text", "label": label, "id": "", "value": "", "x": 180, "y": ry + 13,
+                                "w": 170, "h": 24, "selected": sel, "_row": row[1]})
+                elif self.rows_stacked:
                     name, number = label.split(" ", 1)
                     els.append({"type": "cell", "label": "", "id": "", "value": "", "x": 10, "y": ry, "w": 370, "h": 56,
                                 "selected": sel, "_row": row[1]})
@@ -279,6 +302,15 @@ class FakeApp:
             for j, t in enumerate(old):
                 els.append({"type": "text", "label": t, "id": "", "value": "", "x": 14 + 3 * j, "y": 700 + 8 * j,
                             "w": 220, "h": 40, "_hidden": True})
+        if self.offscreen_copies:
+            copies = [{"type": "text", "label": t, "id": "", "value": "", "x": 10, "y": -2000 - 50 * i, "w": 230, "h": 40}
+                      for _, t in self.messages for i in range(self.offscreen_copies)]
+            els = els[:2] + copies + els[2:]
+        if self._nav_caption_on:  # overlaps the top of the echo bubble
+            els.append({"type": "button", "label": "Продължи", "id": "", "value": "", "x": 135, "y": 74, "w": 120,
+                        "h": 40, "_hidden": True})
+            els.append({"type": "text", "label": "Продължи", "id": "", "value": "", "x": 135, "y": 74, "w": 120,
+                        "h": 40})
         if self.nav_ghost:
             els.append({"type": "button", "label": "Continue", "id": "", "value": "", "x": 20, "y": 18, "w": 120,
                         "h": 40, "enabled": False})
@@ -340,7 +372,7 @@ class FakeApp:
             if self.switch_at is not None and time.monotonic() >= self.switch_at:
                 self.state, self.switch_at = "backgroundSuspended", None
             if cmd == "ping":
-                return {"driver": "simchat", "version": 2}
+                return {"driver": "simchat", "version": 3}
             if cmd == "state":
                 return {"app_state": self.state}
             if cmd == "activate":
@@ -355,6 +387,11 @@ class FakeApp:
                 found = [e for e in (self.elements() if self.state == "foreground" else [])
                          if (e["label"] == args.get("label") if args.get("label") else e["id"] == args.get("id"))
                          and (not args.get("type") or e["type"] == args["type"])]
+                frames = args.get("frames")
+                if frames:  # version 3: look through all copies, return the ones at these frames
+                    found = [e for e in found if any(all(abs(e[k] - f[k]) <= 2 for k in "xywh") for f in frames)]
+                else:       # version 2: the first 12 copies in tree order
+                    found = found[:12]
                 return {"elements": [{"x": e["x"], "y": e["y"], "w": e["w"], "h": e["h"],
                                       "hittable": not e.get("_hidden")} for e in found]}
             if cmd == "snapshot":
@@ -387,7 +424,7 @@ class FakeApp:
                         text, self.value, self.cursor = self.value, "", 0
                         self._user(text)
                     return {}
-                if self.rows_as_text:
+                if self.rows_as_text or self.rows_right:
                     for e in self.elements():
                         if e["type"] == "text" and "_row" in e and self._hit(e, x, y):
                             self.rows[e["_row"]][1] = not self.rows[e["_row"]][1]
@@ -417,6 +454,8 @@ class FakeApp:
                                 self.state = "background"
                             return {}
                         payload = dict(self.buttons).get(label)
+                        if label == "Продължи" and self.nav_caption:
+                            self._nav_caption_on = True
                         if self.submit_echo and label == "Продължи":
                             echo = "\n".join(part for r in self.rows if r[1] for part in r[0].split(" ", 1))
                             self._user(echo, payload="/" + payload)

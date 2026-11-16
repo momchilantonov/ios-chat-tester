@@ -13,7 +13,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .config import HOME
 from .driver import DriverError, DriverManager, Simulator
-from .plan import STATUSES, fill_results, format_result, parse_plan, public_rows
+from .plan import STATUSES, fill_results, format_result, lint_plan, parse_plan, public_rows
 from collections import Counter
 
 from .screen import (BUTTON_TYPES, CONTROL_TYPES, Element, Screen, anchor_hits, exact, group_options, key,
@@ -26,7 +26,7 @@ WRITABLE = ("runs", "plans")
 WRITABLE_EXT = (".md", ".json", ".txt", ".yaml", ".yml")
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
 VERDICTS = ("PASS", "FAIL", "BLOCKED", "INCOMPLETE", "INCONCLUSIVE")
-DRIVER_VERSION = 2     # SimDriverServer.swift "ping" version this code expects (2: "hittable")
+DRIVER_VERSION = 3     # SimDriverServer.swift "ping" version this code expects (2: "hittable", 3: its "frames")
 ECHO_WAIT_S = 2.0      # after a tap: how long to look for the user's own echo bubble
 MAX_SCROLL_UP = 3      # swipes to find the start of a reply that is longer than the screen
 _MARKER = re.compile(r"\[[A-Z][A-Z_-]{2,}[^\]]*\]")          # [QUICK-REPLY ...], [SELECT ...]
@@ -157,6 +157,10 @@ class Tester:
         self._hit_cache: Dict[tuple, bool] = {}  # (type, label, frame) -> hittable, for hidden-copy detection
         self._no_hittable = False                # the running driver is older than the "hittable" command
         self._before_user: List[str] = []        # the user's own bubbles on screen before the last action
+        self._before_scr: Optional[Screen] = None  # the screen before the last action (to see how far it scrolled)
+        self._before_user_els: List[Element] = []
+        self._own: List[str] = []                # what the user's last action shows on their side (sent/tapped/selected)
+        self._dialog_texts: set = set()          # texts of an in-app dialog that is open
         self._option_rows: List[List[str]] = []  # option rows of the latest reply (texts)
         self._selected: List[str] = []           # texts of rows/controls selected since the latest reply
         self._ev_base: Optional[int] = None  # reply-evidence item count at the last user action
@@ -227,9 +231,9 @@ class Tester:
             unknown = [e for e in cands if k(e) not in self._hit_cache]
             if unknown:
                 res = self._hittable(unknown)
-                for e in unknown:
-                    if e.index in res:
-                        self._hit_cache[k(e)] = res[e.index]
+                if res:  # the driver answered: a frame it did not find stays unknown (None), asked once
+                    for e in unknown:
+                        self._hit_cache[k(e)] = res.get(e.index)
                 if len(self._hit_cache) > 2000:
                     self._hit_cache.clear()
             scr.hidden = {e.index for e in cands if self._hit_cache.get(k(e)) is False}
@@ -300,11 +304,30 @@ class Tester:
         items = self._evidence()
         self._ev_base_all, self._ev_base = (len(items[0]), len(items[1])) if items is not None else (None, None)
         self._anchor = anchor
-        self._before = [m.text for m in before.messages(exclude)]
-        self._before_user = [m.text for m in before.messages(exclude) if before.user_side(m)]
+        self._own = [anchor] + list(self._selected) if anchor else []
+        self._set_before(before, exclude)
         self._turn_offsets = self._log_sizes()
         self._turn_wall = time.time()
         self._seen_add(self._before)
+
+    def _set_before(self, scr: Screen, exclude: List[Optional[Element]]) -> None:
+        """Remember the conversation as it is now - also the bubbles under the navigation bar or a banner."""
+        msgs = scr.messages(exclude, covered=True)
+        self._before = [m.text for m in msgs]
+        self._before_user_els = [m for m in msgs if scr.user_side(m)]
+        self._before_user = [m.text for m in self._before_user_els]
+        self._before_scr = scr
+
+    def _mine_now(self, scr: Screen) -> List[str]:
+        """The user's bubbles from before the action that are still on screen: the chat may have scrolled them
+        away, and then a bubble with the same text is the new one."""
+        if self._before_scr is None:
+            return self._before_user
+        dy = scr.shift_from(self._before_scr)
+        if dy is None:
+            return []  # nothing from before is on screen any more
+        top, bottom = 0.0, scr.height or 1e9
+        return [e.text for e in self._before_user_els if top <= e.center[1] + dy <= bottom]
 
     def _seen_add(self, texts: List[str]) -> None:
         for t in texts:
@@ -437,17 +460,28 @@ class Tester:
         send = scr.send_button(self.chat, comp)
         msgs = scr.messages([comp])
         hidden = self._hidden_copies(scr, msgs, [comp])
+        buttons = scr.buttons([comp, send])
+        stale = self._stale_buttons(scr, buttons)
+        rows = self._screen_options(scr, [m for m in msgs if m.index not in hidden], buttons)
+        in_rows = {e.index for r in rows for e in r}
         out: Dict[str, Any] = {
             "app_state": scr.app_state, "keyboard": scr.keyboard, "alerts": scr.alerts,
             "elements": scr.listing(),
-            "messages": [m.text for m in msgs if m.index not in hidden],
-            "buttons": ["[%d] %s" % (b.index, b.label or b.id) for b in scr.buttons([comp, send])],
+            "messages": [m.text for m in msgs if m.index not in hidden and m.index not in in_rows],
+            "buttons": ["[%d] %s%s" % (b.index, b.label or b.id, "" if b.enabled else " (disabled)")
+                        for b in buttons if b not in stale],
             "composer": comp.describe() if comp else None,
             "send_button": send.describe() if send else None,
             "typing": scr.typing(self.chat),
         }
         if hidden:
             out["hidden_copies"] = [m.describe() for m in msgs if m.index in hidden]
+        if rows:
+            out["options"] = ["[%d] %s" % (r[0].index, " · ".join(e.text for e in sorted(r, key=lambda e: e.x)))
+                              for r in rows]
+        if stale:
+            out["stale_buttons"] = ["[%d] %s (disabled, belongs to an answered message)" % (b.index, b.label or b.id)
+                                    for b in stale]
         acts = scr.actions([comp])
         if acts:
             out["actions"] = ["[%d] %s" % (a.index, a.text) for a in acts]
@@ -465,6 +499,27 @@ class Tester:
                 out["_image"] = self._screenshot_file("screen")
             except DriverError as exc:
                 out["image_error"] = str(exc)
+        return out
+
+    def _screen_options(self, scr: Screen, msgs: List[Element], buttons: List[Element]) -> List[List[Element]]:
+        """Picker rows below the user's latest bubble: options, not messages. Grouped as in wait_for_reply, or -
+        once a row is selected and Continue is enabled - by the rows the latest reply offered."""
+        floor = self._latest_user_y(scr)
+        after = [m for m in msgs if floor is None or m.y > floor]
+        rows = group_options(after, buttons, [e for e in scr.visible() if e.type in ("cell", "other") and e.h <= 160])
+        if rows or not self._option_rows:
+            return rows
+        out: List[List[Element]] = []
+        pool = list(after)
+        for texts in self._option_rows:
+            row: List[Element] = []
+            for t in texts:
+                hit = next((m for m in pool if norm(m.text) == norm(t)), None)
+                if hit is not None:
+                    row.append(hit)
+                    pool.remove(hit)
+            if row:
+                out.append(row)
         return out
 
     def _screenshot_file(self, name: str) -> str:
@@ -530,6 +585,7 @@ class Tester:
             return {"tapped": what, "left_app": "in_app_browser", "hint": self.IN_APP_BROWSER_HINT}
         if echo:
             self._anchor = "\n".join(echo)  # the reply comes below the user's own bubble, whatever it says
+            self._own = list(dict.fromkeys(self._own + echo))
             self._last_tap = echo[-1]
             wrong = self._wrong_echo(before, target, echo) if want_echo else []
             if wrong:
@@ -593,9 +649,10 @@ class Tester:
         screen before. A submit button's echo may list the selected rows."""
         if after.app_state != "foreground":
             return []
-        old = Counter(norm(m.text) for m in before.messages([before.composer(self.chat)]) if before.user_side(m))
+        old = Counter(norm(m.text) for m in before.messages([before.composer(self.chat)], covered=True)
+                      if before.user_side(m))
         new = []
-        for m in after.messages([after.composer(self.chat)]):
+        for m in after.messages([after.composer(self.chat)], covered=True):  # it may sit under the nav bar
             if not after.user_side(m):
                 continue
             k = norm(m.text)
@@ -637,8 +694,12 @@ class Tester:
         for e in els:
             groups.setdefault((e.type, e.label, "" if e.label else e.id), []).append(e)
         for (typ, label, ident), members in groups.items():
+            want = [{"x": e.x, "y": e.y, "w": e.w, "h": e.h} for e in members]
             try:
-                frames = self._driver().call("hittable", type=typ, label=label, id=ident).get("elements") or []
+                # frames: the driver looks through every element with this label (a closing line the bot
+                # repeats after every flow has dozens of copies) and returns those at these frames
+                frames = self._driver().call("hittable", type=typ, label=label, id=ident,
+                                             frames=want).get("elements") or []
             except DriverError as exc:
                 if "unknown command" in str(exc):
                     self._no_hittable = True
@@ -654,7 +715,7 @@ class Tester:
 
     def _latest_user_y(self, scr: Screen) -> Optional[float]:
         latest = [norm(t) for t in self._sent] + ([norm(self._last_tap)] if self._last_tap else [])
-        mine = [m for m in scr.messages() if norm(m.text) in latest]
+        mine = [m for m in scr.messages(covered=True) if norm(m.text) in latest and scr.user_side(m)]
         return max((m.y for m in mine), default=None)
 
     def _ambiguous(self, scr: Screen, hits: List[Element]) -> List[str]:
@@ -680,7 +741,7 @@ class Tester:
         """Several copies of a label (old menus keep reporting positions after scrolling away): prefer buttons,
         then copies below the user's latest message (they belong to the newest bot reply), then the lowest."""
         latest = [norm(t) for t in self._sent] + ([norm(self._last_tap)] if self._last_tap else [])
-        mine = [m for m in scr.messages() if norm(m.text) in latest]
+        mine = [m for m in scr.messages(covered=True) if norm(m.text) in latest]
         floor = max((m.y for m in mine), default=None)
         return sorted(hits, key=lambda e: (e.type not in BUTTON_TYPES,
                                            floor is not None and e.y <= floor, -e.y))
@@ -911,7 +972,7 @@ class Tester:
         while True:
             scr = self._snapshot()
             cur = scr.locate(typed) or scr.composer(self.chat)
-            bubble = any(norm(m.text) == norm(text) for m in scr.messages([cur]))
+            bubble = any(norm(m.text) == norm(text) for m in scr.messages([cur], covered=True))
             if (cur is not None and scr.is_empty_input(cur)) or bubble:
                 out = {"sent": text, "confirmed": True, "next": "call wait_for_reply"}
                 self._auto_session(out)
@@ -929,12 +990,14 @@ class Tester:
         busy = scr.typing_elements(self.chat)
         dlg = self._dialog(scr)
         dlg_texts = {norm(t) for t in (dlg or {}).get("texts", [])}
-        new_el = [e for e in new_message_elements(self._before, scr, self._anchor, [comp], self._seen, ev_texts,
-                                                  self._before_user)
-                  if not any(b.index == e.index or b.contains(e) for b in busy)  # the typing indicator
-                  and norm(e.text) not in dlg_texts]
+        found = [e for e in new_message_elements(self._before, scr, self._anchor, [comp], self._seen, ev_texts,
+                                                 self._mine_now(scr), self._own)
+                 if not any(b.index == e.index or b.contains(e) for b in busy)  # the typing indicator
+                 and norm(e.text) not in dlg_texts]
+        covered = [e for e in found if scr.covered(e)]  # under the nav bar/banner: not read yet
+        new_el = [e for e in found if not scr.covered(e)]
         real = [e for e in new_el if not any(r.search(e.text) for r in rx)]
-        return {"comp": comp, "new_el": new_el, "real": real,
+        return {"comp": comp, "new_el": new_el, "real": real, "covered": covered,
                 "interim": [e.text for e in new_el if e not in real],
                 "cards": [e.text for e in scr.carousel_texts() if norm(e.text) not in self._seen],
                 "app_alerts": [a for a in scr.app_alerts() if norm(a["label"]) not in self._seen] + ([dlg] if dlg else [])}
@@ -943,11 +1006,14 @@ class Tester:
         """An in-app dialog drawn as plain views ("Are you sure you want to end the conversation?"): the composer
         is gone, new texts and buttons are on screen."""
         if scr.app_state != "foreground" or scr.composer(self.chat) is not None or scr.web_view():
+            if scr.app_state == "foreground" and scr.composer(self.chat) is not None:
+                self._dialog_texts = set()  # the chat is back: the dialog is closed
             return None
-        texts = [m.text for m in scr.messages() if norm(m.text) not in self._seen]
+        texts = [m.text for m in scr.messages() if norm(m.text) not in self._seen or norm(m.text) in self._dialog_texts]
         buttons = scr.buttons()
         if not texts or not buttons:
             return None
+        self._dialog_texts |= {norm(t) for t in texts}  # still the dialog when screen() looks again later
         return {"kind": "dialog", "label": " ".join(texts)[:300], "texts": texts,
                 "buttons": ["[%d] %s" % (b.index, b.label or b.id) for b in buttons]}
 
@@ -989,14 +1055,14 @@ class Tester:
             o = self._observe(scr, ev_texts)
             typing = scr.typing(self.chat)
             settled = now - stable_since >= quiet
-            on_screen = bool(o["real"] or o["cards"] or o["app_alerts"])
+            on_screen = bool(o["real"] or o["covered"] or o["cards"] or o["app_alerts"])
             if ev_new and ev_seen_at is None:
                 ev_seen_at = now  # the bot answered; the app may draw it a moment later
             if ev_on:
                 drawn = False
                 if ev_new:
                     comp_ = o["comp"]
-                    shown = ([e.text for e in o["real"]] + o["cards"] + [b.text for b in scr.buttons([comp_])]
+                    shown = ([e.text for e in o["covered"] + o["real"]] + o["cards"] + [b.text for b in scr.buttons([comp_])]
                              + [a.text for a in scr.actions([comp_])] + [c.text for c in scr.controls([comp_])])
                     drawn = self._ev_shown(ev_texts, shown)
                     if not drawn and o["real"]:  # the reply starts above the top edge: its last part must be there
@@ -1016,13 +1082,14 @@ class Tester:
                 break  # a dialog/alert and nothing else: the agent must answer it
             self.sleep(poll)
 
-        # A reply longer than the screen: its first bubbles are above the top edge.
+        # A reply longer than the screen: its first bubbles are above the top edge, or under the navigation bar
+        # or a banner (chat lists scroll the user's bubble to the top). Scroll up and read them.
         extra: List[str] = []
         scrolled = 0
-        if self._anchor and o["real"] and not scr.alerts:
+        if self._anchor and (o["real"] or o["covered"]) and not scr.alerts:
             msgs = scr.messages([o["comp"]])
-            if (msgs and msgs[0].index == o["real"][0].index
-                    and not anchor_hits(scr, msgs, self._anchor)):
+            if o["covered"] or (msgs and o["real"] and msgs[0].index == o["real"][0].index
+                                and not anchor_hits(scr, msgs, self._anchor)):
                 extra, scrolled, found = self._collect_above(o)
                 scr = self._snapshot()
                 o = self._observe(scr, ev_texts)
@@ -1031,15 +1098,30 @@ class Tester:
         send = scr.send_button(self.chat, comp)
         buttons = scr.buttons([comp, send])
         acts = scr.actions([comp])
-        rows = group_options(o["real"], buttons,
-                             [e for e in scr.visible() if e.type in ("cell", "other") and e.h <= 160])
+        # the question of a picker may be under the bar: it still marks where the rows start
+        rows = [r for r in group_options(o["covered"] + o["real"], buttons,
+                                         [e for e in scr.visible() if e.type in ("cell", "other") and e.h <= 160])
+                if not any(scr.covered(e) for e in r)]
         in_rows = {e.index for row in rows for e in row}
         new = extra + [e.text for e in o["real"] if e.index not in in_rows]
-        replied = bool(o["new_el"] or o["cards"] or ev_new or o["app_alerts"])
+        if o["covered"]:  # not read even after scrolling: say so instead of dropping them silently
+            got = {norm(t) for t in new}
+            under = [e.text for e in o["covered"] if norm(e.text) not in got]
+        else:
+            under = []
+        replied = bool(o["new_el"] or o["covered"] or o["cards"] or ev_new or o["app_alerts"])
+        stale = self._stale_buttons(scr, buttons)
         out: Dict[str, Any] = {"replied": replied, "new_messages": new,
                                "buttons": ["[%d] %s%s" % (b.index, b.label or b.id, "" if b.enabled else " (disabled)")
-                                           for b in buttons],
+                                           for b in buttons if b not in stale],
                                "waited_s": round(self.clock() - start, 1), "typing": typing}
+        if stale:
+            out["stale_buttons"] = ["[%d] %s (disabled, belongs to an answered message)" % (b.index, b.label or b.id)
+                                    for b in stale]
+        if under:
+            out["under_bar"] = under
+            out["under_bar_note"] = ("these new texts are under the navigation bar/banner and could not be read by "
+                                     "scrolling - check screenshot(); exact-text checks need the evidence")
         if scrolled:
             out["scrolled_up"] = scrolled
             out["scroll_note"] = ("the reply was longer than the screen: scrolled up %d time(s) to read its start%s, "
@@ -1085,7 +1167,7 @@ class Tester:
                     out["evidence_options_missing"] = missing
                     out["note_options"] = ("the bot sent options that are not on screen: %s - not rendered "
                                            "(possible app/bot bug) or scrolled away; check screen()" % missing)
-            if texts and (o["new_el"] or o["cards"]):
+            if texts and (o["new_el"] or o["covered"] or o["cards"]):
                 hay = key(" ".join([m.text for m in scr.messages([comp])] + extra + o["cards"]
                                    + [b.label for b in buttons] + [a.text for a in acts]))
                 gone = [p_ for p_ in _paragraphs(texts) if key(p_)[:60] not in hay]
@@ -1093,10 +1175,10 @@ class Tester:
                     out["evidence_texts_missing"] = [g[:300] for g in gone]
                     out["note_missing"] = ("not on screen: scrolled away or not rendered (possible app bug) - check "
                                            "screenshot()")
-            if ev_new and not o["new_el"] and not o["cards"]:
+            if ev_new and not o["new_el"] and not o["covered"] and not o["cards"]:
                 out["note"] = ("the endpoint shows a new bot reply but nothing new appeared on screen within %ss: it "
                                "repeats an earlier message, or it was not rendered - compare with screen()" % grace)
-            if not ev_new and (o["new_el"] or o["cards"]):
+            if not ev_new and (o["new_el"] or o["covered"] or o["cards"]):
                 out["local_only"] = True
                 out["local_only_note"] = ("the app drew these texts, but the bot's endpoint shows no new reply within "
                                           "%ss: a local/interim text, or reply_evidence.match does not fit - this is "
@@ -1117,9 +1199,9 @@ class Tester:
             self.run.transcript.append({"from": "bot", "messages": new, "options": out.get("options", []),
                                         "buttons": [b.label or b.id for b in buttons]})
         # Next wait compares against this screen unless a new action resets it.
-        self._before = [m.text for m in scr.messages([comp])]
-        self._before_user = [m.text for m in scr.messages([comp]) if scr.user_side(m)]
-        self._seen_add(extra + self._before + [e.text for e in carousel])
+        self._set_before(scr, [comp])
+        self._seen_add(extra + [t for t in self._before if norm(t) not in self._dialog_texts]
+                       + [e.text for e in carousel])
         if replied:
             self._option_rows = [[e.text for e in r] for r in rows]
             self._selected = []
@@ -1128,10 +1210,17 @@ class Tester:
             self._ev_base_all, self._ev_base = len(ev[0]), len(ev[1])
         return out
 
+    def _stale_buttons(self, scr: Screen, buttons: List[Element]) -> List[Element]:
+        """Disabled buttons above the user's latest bubble: e.g. the Continue of a picker that was answered."""
+        floor = self._latest_user_y(scr)
+        if floor is None:
+            return []
+        return [b for b in buttons if not b.enabled and b.center[1] < floor]
+
     def _collect_above(self, o: Dict[str, Any]) -> tuple:
         """Scroll up (at most MAX_SCROLL_UP swipes) until the user's message is visible, collect the bubbles
         below it, then scroll back down. Returns (texts above the current screen, swipes, anchor found)."""
-        bottom = {norm(e.text) for e in o["new_el"]}
+        bottom = {norm(e.text) for e in o["new_el"]}  # the covered ones are not in it: they are read here
         screens: List[List[str]] = []
         found = False
         swipes = 0
@@ -1425,6 +1514,9 @@ class Tester:
                            "blocked": blocked}}
         if not plan["rows"]:
             out["warning"] = "no table with the columns Flow | User prompt | Expected | Result found"
+        warnings = lint_plan(plan)
+        if warnings:
+            out["warnings"] = warnings
         return out
 
     def start_run(self, name: str = "", plan: str = "") -> Dict[str, Any]:

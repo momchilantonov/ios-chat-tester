@@ -92,7 +92,7 @@ final class CommandHandler {
         var result: [String: Any]
         switch cmd {
         case "ping":
-            result = ["driver": "simchat", "version": 2, "bundle_id": bundleId]
+            result = ["driver": "simchat", "version": 3, "bundle_id": bundleId]
         case "state":
             result = ["app_state": stateName(app.state)]
         case "activate":
@@ -151,12 +151,51 @@ final class CommandHandler {
             let type = knownTypes.first { typeName($0) == (args["type"] as? String ?? "") } ?? .any
             let predicate = label.isEmpty ? NSPredicate(format: "identifier == %@", ident)
                                           : NSPredicate(format: "label == %@", label)
-            var found: [[String: Any]] = []
-            for el in app.descendants(matching: type).matching(predicate).allElementsBoundByIndex.prefix(12)
-            where el.exists {
+            // frames (version 3): only the copies at these frames are wanted. A closing line the bot repeats
+            // after every flow can have dozens of copies, more than the 12 that version 2 looked at. One
+            // snapshot gives the frames of all copies in tree order (the query's order); only the wanted copies
+            // are then bound and asked for isHittable. Without frames: the first 12 copies, as in version 2.
+            let wanted: [CGRect] = (args["frames"] as? [[String: Any]] ?? []).map {
+                CGRect(x: number($0["x"]) ?? -1, y: number($0["y"]) ?? -1, width: number($0["w"]) ?? 0,
+                       height: number($0["h"]) ?? 0)
+            }
+            func near(_ a: CGRect, _ b: CGRect) -> Bool {
+                abs(a.minX - b.minX) <= 2 && abs(a.minY - b.minY) <= 2 && abs(a.width - b.width) <= 2
+                    && abs(a.height - b.height) <= 2
+            }
+            func entry(_ el: XCUIElement) -> [String: Any] {
                 let f = el.frame
-                found.append(["x": Double(f.origin.x), "y": Double(f.origin.y), "w": Double(f.width),
-                              "h": Double(f.height), "hittable": el.isHittable])
+                return ["x": Double(f.origin.x), "y": Double(f.origin.y), "w": Double(f.width),
+                        "h": Double(f.height), "hittable": el.isHittable]
+            }
+            let query = app.descendants(matching: type).matching(predicate)
+            var found: [[String: Any]] = []
+            if wanted.isEmpty {
+                for el in query.allElementsBoundByIndex.prefix(12) where el.exists {
+                    found.append(entry(el))
+                }
+            } else if let root = try? app.snapshot() {
+                var frames: [CGRect] = []
+                func collect(_ s: XCUIElementSnapshot) {
+                    for c in s.children {
+                        if (type == .any || c.elementType == type)
+                            && (label.isEmpty ? c.identifier == ident : c.label == label) {
+                            frames.append(c.frame)
+                        }
+                        collect(c)
+                    }
+                }
+                collect(root)
+                var used = Set<Int>()
+                for w in wanted {
+                    guard let i = frames.indices.first(where: { !used.contains($0) && near(frames[$0], w) })
+                    else { continue }
+                    used.insert(i)
+                    let el = query.element(boundBy: i)
+                    if el.exists && near(el.frame, w) {  // a different order would bind another copy: skip it
+                        found.append(entry(el))
+                    }
+                }
             }
             result = ["elements": found]
         case "alerts":

@@ -25,12 +25,15 @@ Source: <flow files / ticket / guide section the plan was made from>
   must contain everything needed from the start (including any prelude steps as normal rows).
 - **One action per row** in *User prompt*:
   - plain text -> typed and sent exactly as written (write it as a real customer would, in the profile's language)
+  - `type: <text>` -> typed even though an option with this text is on screen (the "typed option" branch:
+    `type: VISA CLASSIC`); the tester sends it with `allow_button_text=true`
   - `tap <label>` -> tap a quick reply / row / button with that label - always a real tap, never typed
   - `select <label>` -> tick a checkbox or list row (usually followed by a `tap <continue label>` row);
     `select <label> · <detail>` when labels repeat (`select DEBIT MASTERCARD · 4321`: the row whose next
     line or neighbour contains 4321)
-  - `tap first option` / `select first row` / `tap last option` / `select second row` - when the concrete item
-    depends on test data: counted top to bottom among the options of the bot's latest message
+  - `tap first option` / `select first row` / `tap last option` / `select second row` - only in hand-written
+    plans (counted top to bottom among the options of the bot's latest message); the planner always names rows
+    by their visible text
   - `swipe left|right on <what>` -> carousels
   - `wait` -> send nothing, only wait for the next bot message
 - **Expected**
@@ -51,6 +54,6 @@ Source: <flow files / ticket / guide section the plan was made from>
   `blocked: state-changing - needs operator OK` unless the source explicitly allows it. The tester
   skips such rows and keeps the text. Any other row stays runnable; a softer condition goes into Expected as
   `precondition: <what>`, and the tester runs the row and reports what happened.
-- No placeholders in prompts (`tap <some card>` is invalid) - use a real label from the bot's texts/mocks or
-  a positional form above.
+- No placeholders in prompts (`tap <some card>` is invalid) - use a real label from the bot's texts/mocks.
+- A disabled control is never a step (e.g. Continue before anything is selected).
 - Keep cells on one line; use `\|` for a literal pipe.

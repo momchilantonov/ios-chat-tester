@@ -15,6 +15,8 @@ CONTAINER_TYPES = ("scrollView", "collectionView", "table")  # swipe targets suc
 CONTROL_TYPES = ("cell", "switch", "toggle", "checkBox", "radioButton", "slider", "segmentedControl",
                  "picker", "pickerWheel", "stepper")  # rich components: list rows, checkboxes, ...
 THIN_PT = 8.0  # scroll indicators are a few points wide; real text is never this thin
+RIGHT_EDGE_PT = 32.0  # the user's own bubbles end this close to the right screen edge (picker rows don't)
+BAR_SLACK_PT = 2.0    # an element whose centre is this close below a bar's bottom edge still counts as under it
 ALERT_TYPES = ("alert", "sheet")
 BANNER_RX = re.compile(r"banner|toast|snackbar|notification", re.IGNORECASE)
 
@@ -147,12 +149,43 @@ class Screen:
                 selected=bool(e.get("selected", False)), x=float(e.get("x", 0)), y=float(e.get("y", 0)),
                 w=float(e.get("w", 0)), h=float(e.get("h", 0)), depth=int(e.get("depth") or 0)))
         self.hidden: set = set()  # indices of hidden copies (set by the tester after asking the driver)
-        self._shown = [e for e in self.elements if self.on_screen(e) and not self._under_chrome(e)]
+        on = [e for e in self.elements if self.on_screen(e)]
+        self._shown = [e for e in on if not self._under_chrome(e)]
+        self._covered = [e for e in on if self._under_chrome(e)]  # under the nav bar or a top banner
+        self._covered_idx = {e.index for e in self._covered}
+        self._bubbles = [c for c in self.elements if c.type in ("other", "cell")
+                         and (not self.width or c.w < 0.9 * self.width)]
 
     # -- geometry -------------------------------------------------------------------------------
     def user_side(self, e: Element) -> bool:
-        """Right-aligned: the user's own bubbles (and tap echoes) in a chat."""
-        return bool(self.width) and e.x > self.width * 0.12 and e.x + e.w / 2 > self.width * 0.5
+        """The user's own bubbles (and tap echoes): right half, and the bubble - the element itself or a tight
+        wrapper around it - ends at the right screen edge. A picker row with the same text, whose centre may be
+        right of the middle too, ends well before the edge."""
+        if not self.width or e.x <= self.width * 0.12 or e.x + e.w / 2 <= self.width * 0.5:
+            return False
+        right = e.x + e.w
+        for c in self._bubbles:
+            if c.index != e.index and c.w <= e.w + 80 and c.contains(e):
+                right = max(right, c.x + c.w)
+        return right >= self.width - max(RIGHT_EDGE_PT, 0.08 * self.width)
+
+    def covered(self, e: Element) -> bool:
+        """On screen but under the navigation bar or a top banner: the user can't read it."""
+        return e.index in self._covered_idx
+
+    def shift_from(self, before: "Screen") -> Optional[float]:
+        """How far the chat moved since `before` (points, negative = up): the median move of the message texts
+        that occur exactly once on both screens. None when the screens share no such text."""
+        def uniq(scr: "Screen") -> Dict[tuple, Element]:
+            if getattr(scr, "_uniq", None) is None:
+                ks: Dict[tuple, List[Element]] = {}
+                for m in scr.messages(covered=True):
+                    ks.setdefault((m.type, norm(m.text), round(m.x), round(m.w), round(m.h)), []).append(m)
+                scr._uniq = {k: v[0] for k, v in ks.items() if len(v) == 1}
+            return scr._uniq
+        a, b = uniq(before), uniq(self)
+        moves = sorted(b[k].y - a[k].y for k in a if k in b)
+        return moves[len(moves) // 2] if moves else None
 
     def on_screen(self, e: Element) -> bool:
         if not self.width or not self.height:
@@ -160,9 +193,10 @@ class Screen:
         cx, cy = e.center
         return 0 <= cx <= self.width and 0 <= cy <= self.height
 
-    def visible(self) -> List[Element]:
-        """On screen, not under the navigation bar or a top banner, and not a hidden copy."""
-        return [e for e in self._shown if e.index not in self.hidden]
+    def visible(self, covered: bool = False) -> List[Element]:
+        """On screen, not under the navigation bar or a top banner (unless covered=True), not a hidden copy."""
+        pool = sorted(self._shown + self._covered, key=lambda e: e.index) if covered else self._shown
+        return [e for e in pool if e.index not in self.hidden]
 
     def _members(self, bar: Element) -> set:
         """Elements that belong to a bar: its descendants (snapshot depth), or - without depth - inside it."""
@@ -185,7 +219,7 @@ class Screen:
         for bar, members in self._bars:
             if e.index == bar.index or e.index in members:
                 continue
-            if bar.x <= cx <= bar.x + bar.w and cy < bar.y + bar.h:
+            if bar.x <= cx <= bar.x + bar.w and cy < bar.y + bar.h + BAR_SLACK_PT:
                 return True
         return False
 
@@ -239,10 +273,14 @@ class Screen:
                        and self._inside_any(e, boxes) and not self._covered_by_button(e)],
                       key=lambda e: (round(e.y), e.x)) if boxes else []
 
+    def _all_buttons(self) -> List[Element]:
+        """Every button on screen - also hidden copies and buttons under a bar: their captions are no content."""
+        return [b for b in self._shown + self._covered if b.type in BUTTON_TYPES]
+
     def _covered_by_button(self, e: Element) -> bool:
         """A text drawn on a button (same label, overlapping frame) is the button's caption, not content."""
         k = norm_label(e.text)
-        for b in self.visible():
+        for b in self._all_buttons():
             if b.type in BUTTON_TYPES and b.index != e.index and norm_label(b.text) == k and k:
                 if b.x < e.x + e.w and e.x < b.x + b.w and b.y < e.y + e.h and e.y < b.y + b.h:
                     return True
@@ -296,20 +334,20 @@ class Screen:
                        and e.index not in skip and (e.text or e.id) and not self.is_noise(e)],
                       key=lambda e: (round(e.y), e.x))
 
-    def _message_candidates(self, exclude: Iterable[Optional[Element]] = ()) -> List[Element]:
+    def _message_candidates(self, exclude: Iterable[Optional[Element]] = (), covered: bool = False) -> List[Element]:
         excluded = [x for x in exclude if x is not None]
         skip = {x.index for x in excluded}
-        buttons = [e for e in self.visible() if e.type in BUTTON_TYPES]
+        buttons = self._all_buttons()  # a text inside any button frame (hidden or not) is its caption
         chrome = [e for e in self.visible() if e.type in CHROME_TYPES]
-        overlays = self.app_alert_elements()
-        return [e for e in self.visible()
+        overlays = self._overlays()
+        return [e for e in self.visible(covered)
                 if e.type in TEXT_TYPES and e.text.strip() and e.index not in skip
                 and not self.is_noise(e)
                 and not self._inside_any(e, excluded)          # e.g. a custom placeholder label in the composer
                 and not self._inside_any(e, self.carousels())  # carousel cards are reported separately
                 and not any(b.index != e.index and b.contains(e) for b in buttons)
                 and not self._covered_by_button(e)
-                and not any(c.contains(e) for c in chrome)
+                and (self.covered(e) or not any(c.contains(e) for c in chrome))  # covered: not part of the bar
                 and not any(o.index == e.index or o.contains(e) for o in overlays)]
 
     def actions(self, exclude: Iterable[Optional[Element]] = ()) -> List[Element]:
@@ -327,12 +365,13 @@ class Screen:
         last = max((e.y for e in others), default=-1e9)
         return sorted([r for r in rows if r.y > last], key=lambda e: (round(e.y), e.x))
 
-    def messages(self, exclude: Iterable[Optional[Element]] = ()) -> List[Element]:
+    def messages(self, exclude: Iterable[Optional[Element]] = (), covered: bool = False) -> List[Element]:
         """Text-bearing elements top to bottom, without inputs, button captions, action cards and wrapper
-        duplicates."""
+        duplicates. covered=True adds the ones under the navigation bar or a top banner: they can be the user's
+        own bubble (an anchor), but are never reported as messages."""
         exclude = list(exclude)
         acts = self.actions(exclude)
-        cands = [e for e in self._message_candidates(exclude) if not any(a.contains(e) for a in acts)]
+        cands = [e for e in self._message_candidates(exclude, covered) if not any(a.contains(e) for a in acts)]
         out = []
         for e in cands:
             if e.type in ("other", "cell"):
@@ -345,10 +384,14 @@ class Screen:
             out.append(e)
         return sorted(out, key=lambda e: (round(e.y), e.x))
 
-    def app_alert_elements(self) -> List[Element]:
-        """In-app alerts, action sheets and banners/toasts (the system's own alerts are in self.alerts)."""
+    def _overlays(self) -> List[Element]:
         return [e for e in self.visible() if e.type in ALERT_TYPES
                 or (e.type in ("other", "text") and e.id and BANNER_RX.search(e.id))]
+
+    def app_alert_elements(self) -> List[Element]:
+        """In-app alerts, action sheets and banners/toasts (the system's own alerts are in self.alerts); a banner
+        matching chat.ignore_labels (a demo-build banner) is not reported."""
+        return [e for e in self._overlays() if not self.is_noise(e)]
 
     def app_alerts(self) -> List[Dict[str, Any]]:
         out = []
@@ -411,8 +454,10 @@ class Screen:
 
 def new_messages(before: Sequence[str], screen: Screen, anchor: str,
                  exclude: Iterable[Optional[Element]] = (), seen: Iterable[str] = (),
-                 confirm: Iterable[str] = (), before_user: Optional[Sequence[str]] = None) -> List[str]:
-    return [e.text for e in new_message_elements(before, screen, anchor, exclude, seen, confirm, before_user)]
+                 confirm: Iterable[str] = (), before_user: Optional[Sequence[str]] = None,
+                 own: Sequence[str] = ()) -> List[str]:
+    return [e.text for e in new_message_elements(before, screen, anchor, exclude, seen, confirm, before_user, own)
+            if not screen.covered(e)]
 
 
 def _confirmed(text: str, confirm: Sequence[str]) -> bool:
@@ -420,29 +465,52 @@ def _confirmed(text: str, confirm: Sequence[str]) -> bool:
     return bool(k) and any(k in c for c in confirm)
 
 
+def _own_floor(screen: Screen, msgs: List[Element], own: Sequence[str], mine: Sequence[str]) -> Optional[Element]:
+    """The lowest new bubble on the user's side that shows what the user just sent, tapped or selected (e.g. the
+    echo of a picker submit, one line per chosen row) - also when the anchor itself is not found."""
+    owns = {key(t) for t in own if key(t)}
+    left = Counter(norm(t) for t in mine)
+    found = []
+    for m in msgs:
+        if not screen.user_side(m) or key(m.text) not in owns:
+            continue
+        if left[norm(m.text)] > 0:
+            left[norm(m.text)] -= 1  # the same text was on the user's side before the action
+            continue
+        found.append(m)
+    return max(found, key=lambda m: m.y) if found else None
+
+
 def new_message_elements(before: Sequence[str], screen: Screen, anchor: str,
                          exclude: Iterable[Optional[Element]] = (), seen: Iterable[str] = (),
-                         confirm: Iterable[str] = (), before_user: Optional[Sequence[str]] = None) -> List[Element]:
-    """Bot texts that appeared after the user's action.
+                         confirm: Iterable[str] = (), before_user: Optional[Sequence[str]] = None,
+                         own: Sequence[str] = ()) -> List[Element]:
+    """Bot texts that appeared after the user's action. The result can contain elements under the navigation bar
+    or a top banner (screen.covered): the caller must not report them as read.
 
     anchor: the text the user sent or the label they tapped. Its echo is found exactly (labels compared
-    without iOS's trailing '.'), or by prefix only for a bubble on the user's side.
-    - A fresh echo is on screen (more copies than before the action): everything below it is new, also a
-      text seen earlier (a sub-menu with the same title as the main menu). A text seen earlier that sits
-      below everything else is a hidden copy of an old bubble, unless the bot's evidence (confirm) has it.
+    without iOS's trailing '.'), or by prefix, only on the user's side - also under a bar (after sending, chat
+    lists often scroll the user's bubble to the top).
+    - A fresh echo is on screen (more copies than the user's side had before the action): everything below it
+      is new, also a text seen earlier (a sub-menu with the same title as the main menu). A text seen earlier
+      that sits below everything else is a hidden copy of an old bubble, unless the bot's evidence (confirm)
+      has it.
+    - No fresh echo, but a new bubble on the user's side shows one of `own` (the lines of the user's action,
+      the rows selected before a submit): it counts as the echo.
     - Otherwise: what is on screen now minus what was there before, and a text already seen earlier in this
       conversation is never new (chat lists keep hidden copies of old bubbles: welcome, date separators).
     """
     exclude = list(exclude)
-    msgs = screen.messages(exclude)
+    every = screen.messages(exclude, covered=True)
+    msgs = every
     old = {norm(t) for t in seen} | {norm(t) for t in before}
     conf = [key(t) for t in confirm]
     fresh = False
+    mine = before if before_user is None else before_user  # the user's own bubbles before the action
     if anchor:
-        runs = anchor_hits(screen, msgs, anchor)
+        runs = anchor_hits(screen, every, anchor)
         if runs:
             low = max((r[-1] for r in runs), key=lambda m: m.y)
-            mine = before if before_user is None else before_user  # the user's own bubbles before the action
             n = len([ln for ln in anchor.split("\n") if ln.strip()])
             if n <= 1:
                 old_runs = sum(1 for t in mine if norm_label(t) == norm_label(anchor))
@@ -451,7 +519,13 @@ def new_message_elements(before: Sequence[str], screen: Screen, anchor: str,
                 old_runs = sum(1 for i in range(len(mine) - n + 1) if [norm_label(t) for t in mine[i:i + n]] == lines)
             fresh = len(runs) > old_runs
             used = {m.index for r in runs for m in r}
-            msgs = [m for m in msgs if m.y > low.y + 1 and m.index not in used]
+            msgs = [m for m in every if m.y > low.y + 1 and m.index not in used]
+        if not fresh and own:
+            floor = _own_floor(screen, every, list(own) + anchor.split("\n"), mine)
+            if floor is not None:
+                owns = {key(t) for t in own}
+                fresh = True
+                msgs = [m for m in every if m.y > floor.y + 1 and not (screen.user_side(m) and key(m.text) in owns)]
     out: List[Element] = []
     if fresh:
         floor = min((x.y for x in exclude if x is not None), default=screen.height or 1e9)

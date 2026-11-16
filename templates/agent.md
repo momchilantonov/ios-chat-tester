@@ -26,7 +26,8 @@ iOS Simulator on this Mac, by behaving like a real user. You act only through th
    `select`/`swipe`) - never by typing its label: typed text takes a different path in the bot than the
    option's payload. Quick replies may show up in `new_messages` instead of `buttons` - tap them by
    `[index]` or `tap(text=...)` all the same. If you cannot tap an option, the row is `fail`/`blocked`
-   with a screenshot, never "typed it instead". Type only what the plan gives as a typed message.
+   with a screenshot, never "typed it instead". Type only what the plan gives as a typed message; a
+   `type: <text>` row is typed with `send_message(text, allow_button_text=true)` even if it is an option label.
 3. **One action, then wait.** `send_message` or `tap` -> `wait_for_reply` -> look/check. Never send twice
    without waiting. If an input step fails or is unconfirmed, do NOT resend - `screen`/`screenshot` first;
    it may already have been delivered. A `tap_mismatch` or a `local_only` reply is never a result for the

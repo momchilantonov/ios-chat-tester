@@ -107,5 +107,39 @@ def fill_results(text: str, results: Dict[int, str]) -> str:
     return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
 
 
+_POSITIONAL = re.compile(r"^(tap|select)\s+(the\s+)?(first|second|third|fourth|last|\d+(st|nd|rd|th))\s+"
+                         r"(option|row|item|card|button|one)\b", re.IGNORECASE)
+_EMPTY_SELECTION = re.compile(r"empty selection|nothing selected|no selection|without select|none selected|"
+                              r"\(disabled\)|while disabled", re.IGNORECASE)
+
+
+def lint_plan(plan: Dict[str, Any]) -> List[str]:
+    """Problems an unattended run would trip over. The planner fixes them before it replies."""
+    out: List[str] = []
+    rows = plan["rows"]
+    for r in rows:
+        prompt = r["prompt"].strip()
+        if _POSITIONAL.match(prompt):
+            out.append("row %d: %r - name the row by its visible text from the mock data (e.g. `select NAME · 1234`), "
+                       "not by position" % (r["row"], prompt))
+        if re.match(r"^(tap|select)\b", prompt, re.IGNORECASE) and _EMPTY_SELECTION.search(prompt):
+            out.append("row %d: %r - a disabled control is never a step; an empty selection is reached by typing "
+                       "(e.g. \"none of them\")" % (r["row"], prompt))
+    if any(re.match(r"^select\b", r["prompt"].strip(), re.IGNORECASE) for r in rows):
+        if not any(re.match(r"^type:", r["prompt"].strip(), re.IGNORECASE) for r in rows):
+            out.append("picker without a typed-option row: add `type: <a row's visible text>` (typing the name "
+                       "instead of tapping it)")
+        reentry = False
+        for sec in plan["sections"]:
+            typed = [r["prompt"].strip().casefold() for r in rows if r["section"] == sec
+                     and not re.match(r"^(tap|select|swipe|wait|type:)\b", r["prompt"].strip(), re.IGNORECASE)]
+            if len(typed) != len(set(typed)):
+                reentry = True
+        if not reentry:
+            out.append("picker without a re-entry: add a conversation that starts the flow again (the same start "
+                       "prompt) after it finished or was cancelled")
+    return out
+
+
 def public_rows(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [{k: v for k, v in r.items() if not k.startswith("_") and k != "line"} for r in plan["rows"]]

@@ -92,7 +92,8 @@ calls. Use the CLI to check the plumbing, and judge reply detection with the age
 3. Results: `tester/plans/<name>.result.md`. Evidence: `tester/runs/<time>_<name>/`.
 
 **Approvals:**
-- The launchers pass `--allow-tool simchat`.
+- The launchers pass `--allow-tool simchat` and their own MCP config (`--additional-mcp-config`), so the
+  simchat tools load in any folder.
 - If an organisation policy forces approval of MCP tools, answer "yes, for this session" once per tool, about
   10 times.
 - Non-interactive runs (`copilot -p`) are not possible under such a policy.

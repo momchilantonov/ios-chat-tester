@@ -55,6 +55,11 @@ wait_for_reply()
   different details, `tap(text=...)` refuses with `ambiguous: [...]` - tap by `[index]` or label · detail.
 - **Positional prompts** (`tap first option`, `select second row`): count top to bottom among the options
   of the bot's latest message (`buttons`, `options`, `controls`).
+- **`type: <text>` rows** (the plan's "typed option" branch): `send_message(text, allow_button_text=true)` -
+  the only case where you type a label that is shown as an option.
+- `stale_buttons`: disabled buttons of a message that was already answered (an old Continue) - never a step.
+  `under_bar`: new texts under the navigation bar/banner that could not be read by scrolling - judge exact texts
+  with the evidence, and say so in the note.
 - **Rich components**: `wait_for_reply` lists `controls` (list rows, checkboxes, switches, pickers). `SELECTED`
   marks the selected state and `(disabled)` marks buttons that are not usable yet. Typical: tap a row ->
   `screen()` to confirm it is SELECTED and that "Continue" is enabled -> tap "Continue" -> `wait_for_reply`.

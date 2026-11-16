@@ -38,8 +38,9 @@ TOOLS: List[Dict[str, Any]] = [
           "(clean conversation) and then taps through app.after_launch from config (e.g. a demo menu entry) to "
           "reach the chat.", {"fresh": _s("boolean", "Relaunch the app.", default=False),
                               "navigate": _s("boolean", "Run app.after_launch after a fresh launch.", default=True)}),
-    _tool("screen", "Read the current screen: chat messages, buttons with [index], composer, Send button, "
-          "alerts and all labelled elements. image=true also returns a screenshot.",
+    _tool("screen", "Read the current screen: chat messages, buttons with [index], options (picker rows - not "
+          "messages), composer, Send button, alerts/app_alerts (an open dialog) and all labelled elements. "
+          "stale_buttons = disabled buttons of answered messages. image=true also returns a screenshot.",
           {"image": _s("boolean", "Attach a screenshot.", default=False)}),
     _tool("send_message", "Send one chat message as the user: types it into the composer, verifies the text "
           "reads back exactly, taps Send exactly once and confirms it left the composer. Never call it twice "
@@ -50,7 +51,9 @@ TOOLS: List[Dict[str, Any]] = [
     _tool("wait_for_reply", "Wait until the bot's new messages have appeared and the screen is quiet. Returns "
           "new_messages, the visible buttons with [index] and rich controls (list rows, checkboxes, switches; "
           "SELECTED marks the selected ones), options, actions (tappable cards) and the bot's evidence. "
-          "local_only: true = text the app drew without a bot reply - not the answer. Call after every "
+          "local_only: true = text the app drew without a bot reply - not the answer. under_bar = new texts "
+          "hidden under the nav bar/banner that could not be read; stale_buttons = disabled buttons of answered "
+          "messages (not current). Call after every "
           "send_message or tap that should make the bot answer.",
           {"timeout_s": _s("number", "Max seconds (default from config)."),
            "quiet_ms": _s("number", "How long the screen must be unchanged (default from config).")}),
