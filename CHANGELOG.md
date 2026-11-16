@@ -2,6 +2,16 @@
 
 Newest first. After pulling: `python3 install.py` (with your usual flags), then restart both agents.
 
+## Installer: agents in a main repo, seen by a submodule through symlinks
+**After pulling:** nothing to do unless you use this layout. Driver unchanged (version 3). No new config keys.
+
+- `--into <main repo>` with a submodule whose `.github/agents` links to the main repo's folder: the installer
+  saw its own new agent file through that link, reported it as a "same-named agent" and exited with 1. A file
+  that is the installed one (after following links) no longer counts. A different file with the same name in
+  another repo is still reported.
+- README: new case 2b for this layout (install into the main repo, check the links, what to ignore where,
+  start in the submodule).
+
 ## Round 10 – requirements R10-1, R10-2 from the ninth real run (verdict: ready for unattended runs)
 **After pulling:** run `install.py`, restart both agents. Driver unchanged (version 3). No new config keys.
 

@@ -166,6 +166,30 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(list(vs["servers"]), ["other"])
         self.assertTrue((self.clone / "tester" / "config.json").exists())
 
+    def test_into_main_repo_seen_through_a_submodule_symlink(self):
+        """A main repo holds the agents; the submodule's .github/agents is a symlink to them. The installed file,
+        seen through that symlink, is not a 'same-named agent'. A real other file with that name still is."""
+        main = Path(self.tmp.name) / "main"
+        (main / ".github" / "agents").mkdir(parents=True)
+        (main / ".github" / "skills").mkdir()
+        kaf = main / "kaf"
+        (kaf / ".github").mkdir(parents=True)
+        (kaf / ".github" / "agents").symlink_to(main / ".github" / "agents", target_is_directory=True)
+        (kaf / ".github" / "skills").symlink_to(main / ".github" / "skills", target_is_directory=True)
+        code, out = self.run_install("--into", str(main), "--bot-repo", str(kaf), "--bundle-id", "a.b",
+                                     "--no-vscode")
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("WARN", out)
+        self.assertTrue((kaf / ".github" / "agents" / "chat-tester.agent.md").exists())   # visible inside kaf
+        other = Path(self.tmp.name) / "other"
+        (other / ".github" / "agents").mkdir(parents=True)
+        (other / ".github" / "agents" / "chat-tester.agent.md").write_text("")
+        code, out = self.run_install("--into", str(main), "--bot-repo", str(kaf), "--app-repo", str(other),
+                                     "--bundle-id", "a.b", "--no-vscode")
+        self.assertEqual(code, 1, out)
+        self.assertIn("WARN", out)
+        self.assertIn(str(other.resolve()), out)
+
     def test_into_repo_and_dry_run(self):
         repo = Path(self.tmp.name) / "botrepo"
         (repo / ".github").mkdir(parents=True)

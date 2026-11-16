@@ -82,6 +82,41 @@ Pick one. You can switch later (case 4).
    `--no-vscode` if you don't want `.vscode/mcp.json` touched at all.
 4. Always start the agents from **inside that repo**, e.g. `cd <bot repo> && <clone>/tester/bin/my-tester`.
 
+### Case 2b: a main repo whose submodules link to its `.github`
+For this layout: a main repo keeps all AI agents in its own `.github`, and the bot repo is a submodule of it whose
+`.github/agents` and `.github/skills` are symlinks to the main repo's folders. The agents go into the **main**
+repo, and the submodule sees them through its links, the same way it sees your other agents.
+1. Clone the tool somewhere inside the main repo, for example next to your other AI tools:
+   ```bash
+   cd <main repo>/.github
+   git clone https://github.com/momchilantonov/ios-chat-tester.git
+   cd ios-chat-tester
+   ```
+2. Install into the **main** repo, and give the submodule as the bot repo:
+   ```bash
+   python3 install.py --into <main repo> --no-vscode --name my-tester --bundle-id <bundle id> \
+       --app-repo <ios app repo> --bot-repo <main repo>/<bot submodule>
+   ```
+3. Check that the submodule sees the new files:
+   ```bash
+   ls -l <main repo>/<bot submodule>/.github/agents/my-tester.agent.md
+   ```
+   - **Whole folders are linked** (`agents -> ../../.github/agents`): nothing more to do.
+   - **Single files are linked** (one link per agent): add links for `my-tester.agent.md`,
+     `my-tester-planner.agent.md` and the skill folders `chat-testing`, `chat-test-report` and
+     `test-plan-format`, the same way as for your other agents.
+4. Keep the new files out of git:
+   - **Main repo:** add the lines from case 2, step 3 to `<main repo>/.git/info/exclude`.
+   - **Submodule:** linked folders are ignored there already, like your other agents. If you added file links
+     in step 3, ignore them in the submodule's own exclude file. A submodule's `.git` is a file, not a folder,
+     so ask git where the exclude file is: `git -C <bot submodule> rev-parse --git-path info/exclude`.
+5. Start the agents from **inside the submodule**:
+   `cd <main repo>/<bot submodule> && <main repo>/.github/ios-chat-tester/tester/bin/my-tester`.
+   The launcher lets the agent read the folders the links point to (the installer prints them as
+   `add-dir ... (symlink ...)`).
+
+To update, move or uninstall, use cases 3, 4 and 7 with `--into <main repo>`.
+
 ### What the installer does (cases 1 and 2)
 In guided mode it shows each step and waits for your OK (`Y`es, `n`o to skip, `q` to quit).
 

@@ -332,11 +332,15 @@ class Installer:
                 repos.append(parent)
                 break
         targets = {Path(self.a.into).expanduser().resolve()} if self.a.into else set()
+        base = (next(iter(targets)) / ".github") if targets else Path(self.a.copilot_home).expanduser()
+        own = {(base / "agents" / ("%s.agent.md" % name)).resolve() for name in names}
         for repo in dict.fromkeys(p.expanduser().resolve() for p in repos):
             if repo in targets:
                 continue
             for name in names:
                 f = repo / ".github" / "agents" / ("%s.agent.md" % name)
+                if f.exists() and f.resolve() in own:   # our own file, seen through a symlink (e.g. a submodule)
+                    continue
                 if f.exists():
                     empty = f.stat().st_size == 0
                     self.say("  WARN     %s exists%s - in that repo it can take precedence over the installed agent. "
