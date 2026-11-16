@@ -57,6 +57,7 @@ wait_for_reply()
   of the bot's latest message (`buttons`, `options`, `controls`).
 - **`type: <text>` rows** (the plan's "typed option" branch): `send_message(text, allow_button_text=true)` -
   the only case where you type a label that is shown as an option.
+- `screen()["messages"]` lists both sides; your own bubbles start with `you: ` - never take one for a reply.
 - `stale_buttons`: disabled buttons of a message that was already answered (an old Continue) - never a step.
   `under_bar`: new texts under the navigation bar/banner that could not be read by scrolling - judge exact texts
   with the evidence, and say so in the note.

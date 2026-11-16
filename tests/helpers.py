@@ -11,6 +11,13 @@ from fakeapp import FakeApp, FakeDriverServer, FakeSimctl  # noqa: E402
 from simchat.config import DEFAULTS, _merge  # noqa: E402
 from simchat.driver import DriverManager, Simulator  # noqa: E402
 from simchat.tester import Tester  # noqa: E402
+import simchat.driver as _driver  # noqa: E402
+
+# Tests never touch the real driver's state/log files: a running driver must survive the unit tests.
+_SANDBOX = tempfile.mkdtemp(prefix="simchat-tests-")
+_driver.BUILD_DIR = Path(_SANDBOX)
+_driver.STATE_FILE = Path(_SANDBOX) / "driver.json"
+_driver.LOG_FILE = Path(_SANDBOX) / "driver.log"
 
 
 def make_cfg(port, token, **over):

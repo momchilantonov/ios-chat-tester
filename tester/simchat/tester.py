@@ -40,11 +40,29 @@ def _paragraphs(texts: List[str]) -> List[str]:
     lines) reduced to the text it shows, markdown links to their text, URLs dropped."""
     out: List[str] = []
     for t in texts:
-        for line in _MARKER.sub(r"\1", str(t)).splitlines():
+        text = _MARKER.sub(lambda m: "\n".join(_widget_items(m.group(1))), str(t))
+        lines: List[str] = []
+        for line in text.splitlines():
+            if _OPEN_MARKER.search(line):  # markup cut across evidence items: what is left is a widget body
+                lines.extend(_widget_items(_OPEN_MARKER.sub("", line)))
+            else:
+                lines.append(line)
+        for line in lines:
             line = _URL.sub("", _MD_LINK.sub(r"\1", line)).strip()
-            if len(key(line)) >= 3:
+            if len(key(line)) >= 3 and line.casefold() not in _EMPTY_VALUES:
                 out.append(line)
     return out
+
+
+_OPEN_MARKER = re.compile(r"^\[[A-Z][A-Z_-]{2,}(?:\s+|$)|\]$")  # markup cut across evidence items
+_EMPTY_VALUES = {"none", "null", "nil", "undefined", "n/a"}
+
+
+def _widget_items(body: str) -> List[str]:
+    """What a widget shows: its items separated by "|" or lines, without empty values ("None") - e.g. an
+    unlabelled checkbox list expects no text (its rows are checked as evidence_options)."""
+    items = [x.strip() for part in body.splitlines() for x in part.split("|")]
+    return [x for x in items if x and x.casefold() not in _EMPTY_VALUES]
 
 
 def _ekey(text: str) -> str:
@@ -336,7 +354,8 @@ class Tester:
         """Remember the conversation as it is now - also the bubbles under the navigation bar or a banner."""
         msgs = scr.messages(exclude, covered=True)
         self._before = [m.text for m in msgs]
-        self._before_user_els = [m for m in msgs if scr.user_side(m)]
+        suspects = {e.index for e in scr.overlapping()}  # possible ghost copies are no old bubbles of the user
+        self._before_user_els = [m for m in msgs if scr.user_side(m) and m.index not in suspects]
         self._before_user = [m.text for m in self._before_user_els]
         self._before_scr = scr
 
@@ -505,7 +524,9 @@ class Tester:
         out: Dict[str, Any] = {
             "app_state": scr.app_state, "keyboard": scr.keyboard, "alerts": scr.alerts,
             "elements": scr.listing(),
-            "messages": [m.text for m in msgs if m.index not in hidden and m.index not in in_rows],
+            # the user's own bubbles are prefixed "you: " - never a reply of the bot
+            "messages": [("you: " if scr.user_side(m) else "") + m.text for m in msgs
+                         if m.index not in hidden and m.index not in in_rows],
             "buttons": ["[%d] %s%s" % (b.index, b.label or b.id, "" if b.enabled else " (disabled)")
                         for b in buttons if b not in stale],
             "composer": comp.describe() if comp else None,
@@ -1059,7 +1080,7 @@ class Tester:
         dlg = self._dialog(scr)
         dlg_texts = {norm(t) for t in (dlg or {}).get("texts", [])}
         found = [e for e in new_message_elements(self._before, scr, self._anchor, [comp], self._seen, ev_texts,
-                                                 self._mine_now(scr), self._own)
+                                                 self._mine_now(scr), self._own, newest_is_echo=bool(ev_texts))
                  if not any(b.index == e.index or b.contains(e) for b in busy)  # the typing indicator
                  and norm(e.text) not in dlg_texts]
         covered = [e for e in found if scr.covered(e)]  # under the nav bar/banner: not read yet

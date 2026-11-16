@@ -2,6 +2,36 @@
 
 Newest first. After pulling: `python3 install.py` (with your usual flags), then restart both agents.
 
+## Round 9 – requirements R9-1 … R9-5 from the eighth real run
+**After pulling:** run `install.py`, restart both agents. Driver unchanged (version 3). No new config keys.
+
+**B – hides something that did happen**
+- **R9-1 (high):** re-entering a finished flow. Cause: the scroll measurement paired the new picker caption with
+  the old one (same text, same frame shape), so the user's old echo seemed still on screen and the new echo was
+  taken for it. Now a text counts for the measurement only if it occurs once in the whole snapshot (off-screen
+  copies included), possible ghost copies are left out, and the most common move wins. With the bot's evidence
+  already showing the new reply, the newest echo is the echo whatever was counted; everything below it is new.
+
+**A – reports something that did not happen**
+- **R9-2:** widget markup without real text (`[CHECKBOX None | None …]`, also cut across evidence items) expects
+  no text; a widget's items are split on `|`. Its rows are checked through `evidence_options`.
+- **R9-3:** two copies with the same text at exactly the same frame that are not parent and child (two ghosts
+  of an old echo) are now hidden-copy candidates, so the driver is asked about them.
+
+**C – the rest**
+- **R9-4:** `screen()["messages"]` prefixes the user's own bubbles with `you: `.
+- **R9-5:** the unit tests used the real driver state file and stopped a running driver (the uninstall test,
+  through `install.py` importing the already loaded `simchat`). The tests now use a temporary state file, and
+  `install.py` stops only its own clone's driver, in a separate process.
+
+**Not changed:** a bot text repeated after the new echo as the *last* bubble (e.g. the help-with-else line) is
+still skipped without evidence when it may be a hidden copy (Round 5 rule); with `reply_evidence` it is reported.
+
+**Test again:**
+- R9-1 first: the full card-block flow, Cancel, then the start prompt again in the same conversation;
+- the picker reply's `evidence_texts_missing` (R9-2); `screen()` after re-entry (R9-3, R9-4);
+- `python3 -m unittest discover -s tests` while the driver runs: it keeps running (R9-5).
+
 ## Round 8 – requirements R8-1 … R8-7 from the seventh real run
 **After pulling:** run `install.py` (it rewrites the launchers), restart both agents. The driver is unchanged
 (version 3). No new config keys.

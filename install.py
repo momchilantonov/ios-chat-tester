@@ -34,6 +34,7 @@ ROOT = Path(__file__).resolve().parent
 TESTER = ROOT / "tester"
 TEMPLATES = ROOT / "templates"
 SERVER = TESTER / "simchat_server.py"
+DRIVER_STATE = TESTER / "driver" / ".build" / "driver.json"  # this clone's running driver (see simchat/driver.py)
 MANIFEST = TESTER / ".install.json"
 MCP_NAME = "simchat"
 SKILLS = ("chat-testing", "chat-test-report", "test-plan-format")
@@ -480,36 +481,34 @@ class Installer:
             self.dry = False
         return self._uninstall()
 
+    def _stop_driver(self):
+        """Stop this clone's driver in a separate process: importing simchat here could pick up another copy's
+        module (e.g. inside the unit tests) and stop a driver that belongs to someone else."""
+        subprocess.run([self.python, str(SERVER), "stop_driver"], cwd=str(TESTER), capture_output=True,
+                       timeout=60, check=False)
+
     def _restart_hint(self):
         """A driver started before this update keeps running the old build: stop it (only our own process),
         so the next start_driver starts the new one."""
-        sys.path.insert(0, str(TESTER))
-        try:
-            from simchat.config import load_config
-            from simchat.driver import STATE_FILE, DriverManager, Simulator
-        except ImportError:
-            return
-        if STATE_FILE.exists():
-            cfg = load_config()
-            DriverManager(cfg, Simulator(cfg)).stop()
+        if DRIVER_STATE.exists():
+            self._stop_driver()
             self.say("  stop     the running UI driver (old build) - the agent's start_driver starts the new one")
 
     def _driver_cleanup(self):
+        if DRIVER_STATE.exists():
+            self.say("  stop     the UI driver process")
+            if not self.dry:
+                self._stop_driver()
+        if platform.system() != "Darwin":
+            return
         sys.path.insert(0, str(TESTER))
         try:
             from simchat.config import load_config
-            from simchat.driver import STATE_FILE, DriverError, DriverManager, Simulator
+            from simchat.driver import DriverError, Simulator
         except ImportError as exc:
             self.say("  skip     driver cleanup (%s)" % exc)
             return
-        cfg = load_config()
-        sim = Simulator(cfg)
-        if STATE_FILE.exists():
-            self.say("  stop     the UI driver process")
-            if not self.dry:
-                DriverManager(cfg, sim).stop()
-        if platform.system() != "Darwin":
-            return
+        sim = Simulator(load_config())
         try:
             booted = sim.booted()
         except DriverError:

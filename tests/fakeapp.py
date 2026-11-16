@@ -87,6 +87,8 @@ class FakeApp:
         self.focus_delay = 0.0       # after a fresh launch the composer takes this long to accept keyboard focus
         self.band_pair = False       # two overlapping texts above the composer; band_hidden turns them into ghosts
         self.band_hidden = False
+        self.echo_twins = False      # two hidden copies of the user's latest message at exactly the same frame
+        self.keep_rows = False       # an answered picker's rows stay in the history (as in the real app)
         self.lock = threading.Lock()
         self.received = []           # what the "bot" received: {"text"} or {"payload"}
         self.commands = []
@@ -124,6 +126,9 @@ class FakeApp:
             self.messages.append(("bot", "Welcome! How can I help?"))
 
     def _user(self, text, payload=None):
+        if self.keep_rows and self.rows and self.rows_after == len(self.messages):
+            self.messages.extend(("oldrow", r[0]) for r in self.rows)
+            self.rows = []
         if self.answered_buttons:
             self.messages.extend(("oldbtn", b) for b, _ in self.buttons)
         self.messages.append(("user", text))
@@ -238,6 +243,11 @@ class FakeApp:
                 for j, line in enumerate(lines):
                     els.append({"type": "text", "label": line, "id": "", "value": "", "x": 160, "y": ry + 5 + 24 * j,
                                 "w": 200, "h": 20})
+            elif kind == "msg" and row[1] == "oldrow":
+                els.append({"type": "cell", "label": "", "id": "", "value": "", "x": 0, "y": ry, "w": W, "h": 50,
+                            "depth": 1})
+                els.append({"type": "text", "label": row[2], "id": "", "value": "", "x": 112, "y": ry + 16, "w": 246,
+                            "h": 17, "depth": 2})
             elif kind == "msg" and row[1] == "oldbtn":
                 els.append({"type": "button", "label": row[2], "id": "", "value": "", "x": 10, "y": ry, "w": 200,
                             "h": 44, "enabled": False})
@@ -325,8 +335,9 @@ class FakeApp:
                 els.append({"type": "text", "label": t, "id": "", "value": "", "x": 14 + 3 * j, "y": 700 + 8 * j,
                             "w": 220, "h": 40, "_hidden": True})
         if self.real_layout:  # the picker rows and their Continue share one cell
-            idx = [i for i, e in enumerate(els) if "_row" in e or e["id"] == "qr.продължи"
-                   or (e["type"] == "text" and e["label"] == "Продължи")]
+            idx = [i for i, e in enumerate(els) if "_row" in e or e["id"] == "qr.продължи"]
+            idx += [i + 1 for i in idx if els[i]["id"] == "qr.продължи"]  # the button's own caption
+            idx.sort()
             if idx and any("_row" in els[i] for i in idx):
                 first, last = idx[0], idx[-1]
                 part = els[first:last + 1]
@@ -340,6 +351,11 @@ class FakeApp:
             for label, x, y in (("Block these cards?", 14, 700), ("Old echo", 111, 712)):
                 els.append({"type": "text", "label": label, "id": "", "value": "", "x": x, "y": y, "w": 220,
                             "h": 40, "_hidden": self.band_hidden})
+        users = [t for who, t in self.messages if who == "user"]
+        if self.echo_twins and users:
+            for _ in range(2):
+                els.append({"type": "other", "label": users[-1], "id": "", "value": "", "x": 1, "y": 716, "w": 220,
+                            "h": 40, "_hidden": True})
         if self.offscreen_copies:
             copies = [{"type": "text", "label": t, "id": "", "value": "", "x": 10, "y": -2000 - 50 * i, "w": 230, "h": 40}
                       for _, t in self.messages for i in range(self.offscreen_copies)]

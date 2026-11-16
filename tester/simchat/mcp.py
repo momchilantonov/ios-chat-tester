@@ -38,8 +38,8 @@ TOOLS: List[Dict[str, Any]] = [
           "(clean conversation) and then taps through app.after_launch from config (e.g. a demo menu entry) to "
           "reach the chat.", {"fresh": _s("boolean", "Relaunch the app.", default=False),
                               "navigate": _s("boolean", "Run app.after_launch after a fresh launch.", default=True)}),
-    _tool("screen", "Read the current screen: chat messages, buttons with [index], options (picker rows - not "
-          "messages), composer, Send button, alerts/app_alerts (an open dialog) and all labelled elements. "
+    _tool("screen", "Read the current screen: chat messages (the user's own prefixed \"you: \"), buttons with [index], "
+          "options (picker rows - not messages), composer, Send button, alerts/app_alerts (an open dialog) and all labelled elements. "
           "stale_buttons = disabled buttons of answered messages. image=true also returns a screenshot.",
           {"image": _s("boolean", "Attach a screenshot.", default=False)}),
     _tool("send_message", "Send one chat message as the user: types it into the composer, verifies the text "

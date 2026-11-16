@@ -235,18 +235,29 @@ class Screen:
         return e.index in self._covered_idx
 
     def shift_from(self, before: "Screen") -> Optional[float]:
-        """How far the chat moved since `before` (points, negative = up): the median move of the message texts
-        that occur exactly once on both screens. None when the screens share no such text."""
+        """How far the chat moved since `before` (points, negative = up): the most common move of the message
+        texts that occur exactly once in each whole snapshot (off-screen copies count: a new picker with the same
+        caption as an old one is no match). Possible ghost copies are left out - they don't scroll. None when
+        the screens share no such text."""
         def uniq(scr: "Screen") -> Dict[tuple, Element]:
             if getattr(scr, "_uniq", None) is None:
-                ks: Dict[tuple, List[Element]] = {}
-                for m in scr.messages(covered=True):
-                    ks.setdefault((m.type, norm(m.text), round(m.x), round(m.w), round(m.h)), []).append(m)
-                scr._uniq = {k: v[0] for k, v in ks.items() if len(v) == 1}
+                def k(e: Element) -> tuple:
+                    return (e.type, norm(e.text), round(e.x), round(e.w), round(e.h))
+                total = Counter(k(e) for e in scr.elements if e.text)
+                suspects = {e.index for e in scr.overlapping()}
+                scr._uniq = {k(m): m for m in scr.messages(covered=True)
+                             if m.index not in suspects and total[k(m)] == 1}
             return scr._uniq
         a, b = uniq(before), uniq(self)
-        moves = sorted(b[k].y - a[k].y for k in a if k in b)
-        return moves[len(moves) // 2] if moves else None
+        moves = [b[k].y - a[k].y for k in a if k in b]
+        if not moves:
+            return None
+        votes = Counter(round(m / 2.0) for m in moves)  # real bubbles all move by the same amount
+        best, n = votes.most_common(1)[0]
+        if n == 1 and len(moves) > 2:
+            moves.sort()
+            return moves[len(moves) // 2]
+        return sum(m for m in moves if round(m / 2.0) == best) / n
 
     def on_screen(self, e: Element) -> bool:
         if not self.width or not self.height:
@@ -287,6 +298,8 @@ class Screen:
     def overlapping(self) -> List[Element]:
         """Texts and buttons whose frames overlap another one's (not parent/child, not a wrapper with the same
         text). Real bubbles never overlap; stacked hidden copies of old bubbles do."""
+        if getattr(self, "_overlapping", None) is not None:
+            return self._overlapping
         els = [e for e in self._shown if e.text and e.type in TEXT_TYPES + BUTTON_TYPES and not self.is_noise(e)]
         out = set()
         for i, a in enumerate(els):
@@ -295,12 +308,25 @@ class Screen:
                 if area <= 0 or area < 0.25 * min(a.w * a.h, b.w * b.h):
                     continue
                 if a.same_frame(b):
-                    if norm(a.text) == norm(b.text):
+                    # a wrapper repeating its child's text is no copy; two unrelated elements with the same text
+                    # at the same frame are (two ghost copies of an old echo, stacked exactly)
+                    if norm(a.text) == norm(b.text) and (not self._parent or self.related(a, b)):
                         continue
                 elif a.contains(b) or b.contains(a):
                     continue
                 out.update((a.index, b.index))
-        return [e for e in els if e.index in out]
+        self._overlapping = [e for e in els if e.index in out]
+        return self._overlapping
+
+    def related(self, a: Element, b: Element) -> bool:
+        """One is the other's ancestor in the snapshot tree."""
+        for x, y in ((a, b), (b, a)):
+            i = self._parent.get(y.index)
+            while i is not None:
+                if i == x.index:
+                    return True
+                i = self._parent.get(i)
+        return False
 
     def neighbour(self, e: Element) -> str:
         """The text next to e on the same line, or else the line right below it (e.g. a masked card number)."""
@@ -545,7 +571,7 @@ def _own_floor(screen: Screen, msgs: List[Element], own: Sequence[str], mine: Se
 def new_message_elements(before: Sequence[str], screen: Screen, anchor: str,
                          exclude: Iterable[Optional[Element]] = (), seen: Iterable[str] = (),
                          confirm: Iterable[str] = (), before_user: Optional[Sequence[str]] = None,
-                         own: Sequence[str] = ()) -> List[Element]:
+                         own: Sequence[str] = (), newest_is_echo: bool = False) -> List[Element]:
     """Bot texts that appeared after the user's action. The result can contain elements under the navigation bar
     or a top banner (screen.covered): the caller must not report them as read.
 
@@ -556,6 +582,8 @@ def new_message_elements(before: Sequence[str], screen: Screen, anchor: str,
       is new, also a text seen earlier (a sub-menu with the same title as the main menu). A text seen earlier
       that sits below everything else is a hidden copy of an old bubble, unless the bot's evidence (confirm)
       has it.
+    - newest_is_echo (the bot's evidence already has the reply, so the user's bubble is drawn): the lowest copy
+      is the echo even if copies of the same text were there before (re-entering a flow with its start prompt).
     - No fresh echo, but a new bubble on the user's side shows one of `own` (the lines of the user's action,
       the rows selected before a submit): it counts as the echo.
     - Otherwise: what is on screen now minus what was there before, and a text already seen earlier in this
@@ -578,7 +606,7 @@ def new_message_elements(before: Sequence[str], screen: Screen, anchor: str,
             else:
                 lines = [norm_label(ln) for ln in anchor.split("\n") if ln.strip()]
                 old_runs = sum(1 for i in range(len(mine) - n + 1) if [norm_label(t) for t in mine[i:i + n]] == lines)
-            fresh = len(runs) > old_runs
+            fresh = len(runs) > old_runs or newest_is_echo
             used = {m.index for r in runs for m in r}
             msgs = [m for m in every if m.y > low.y + 1 and m.index not in used]
         if not fresh and own:
