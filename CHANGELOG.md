@@ -2,6 +2,19 @@
 
 Newest first. After pulling: `python3 install.py` (with your usual flags), then restart both agents.
 
+## Uninstall: links to removed files, and an MCP file it created
+From the first check of the main repo + submodule layout (two small gaps).
+**After pulling:** nothing to do. Driver unchanged (version 3). No new config keys.
+
+- Links in the repos that pointed at the removed agent or skill files (one link per file, bot repo -> main
+  repo) are removed too, instead of being left pointing at nothing. Links to other agents and links to whole folders stay. An MCP file the installer created itself
+  (e.g. `<repo>/.github/mcp.json`) is deleted when the `simchat` entry was all that was in it; a file that
+  existed before, or that got other entries since, stays. Installs made before this change don't know which
+  file they created, so their empty file still stays: delete it by hand.
+- Test change: `test_fresh_install_rerun_and_uninstall` expected the empty `~/.copilot/mcp-config.json` to stay.
+  The test's home starts empty, so the installer created that file, and now removes it: the test checks that.
+  New tests check that a pre-existing file, and a created file with servers added by hand, are kept.
+
 ## Installer: agents in a main repo, seen by a submodule through symlinks
 **After pulling:** nothing to do unless you use this layout. Driver unchanged (version 3). No new config keys.
 

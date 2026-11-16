@@ -175,15 +175,17 @@ re-clone it, then install from the new folder (case 1 or 2). To keep your settin
    - stops the UI driver;
    - removes the driver's test-runner app from the booted simulators;
    - deletes the agents, the skills and the launchers from **every place you ever installed to** (A and B);
-   - removes the `simchat` entry from each MCP config file. Other entries stay; a file that only had this
-     entry stays, with an empty list.
+   - removes the `simchat` entry from each MCP config file. Other entries stay. A file the installer created
+     itself is deleted when nothing else is left in it;
+   - removes links in your repos that pointed at the removed agent or skill files (case 2b, one link per file).
+     Links to other agents, and links to whole folders, stay.
 
    Files you edited by hand are kept; add `--force` to remove them too.
 3. Delete the folder. This removes the rest: config, profile, plans, runs and the driver build.
    ```bash
    cd ~ && rm -rf <clone>
    ```
-4. If you used B, remove the lines you added to that repo's `.git/info/exclude`.
+4. If you used B, remove the lines you added to that repo's `.git/info/exclude` (and the submodule's, case 2b).
 
 Simulators that were not running during the uninstall may still have the runner app:
 `xcrun simctl uninstall <udid> dev.simchat.SimDriverUITests.xctrunner`.

@@ -151,8 +151,8 @@ class Installer:
             self.say("  same     %s (%s.%s)" % (path, key, MCP_NAME))
             self.manifest["json"].append({"path": str(path), "key": key})
             return
-        if not self.dry:
-            self.manifest["json"].append({"path": str(path), "key": key})
+        if not self.dry:   # "created": uninstall may delete the file again once our entry was its only content
+            self.manifest["json"].append({"path": str(path), "key": key, "created": not path.exists()})
         self.say("  %s %s (%s.%s)" % ("merge   " if path.exists() else "create  ", path, key, MCP_NAME))
         servers[MCP_NAME] = entry
         if not self.dry:
@@ -374,9 +374,13 @@ class Installer:
         if not self.a.dry_run and (self.manifest["files"] or self.manifest["json"]):
             merged = dict(self.old.get("files", {}))
             merged.update(self.manifest["files"])
-            jsons = {(j["path"], j["key"]) for j in self.old.get("json", []) + self.manifest["json"]}
-            MANIFEST.write_text(json.dumps({"files": merged, "json": [{"path": p, "key": k} for p, k in sorted(jsons)]},
-                                           indent=2) + "\n", encoding="utf-8")
+            jsons = {}
+            for j in self.old.get("json", []) + self.manifest["json"]:
+                k = (j["path"], j["key"])
+                jsons[k] = jsons.get(k, False) or bool(j.get("created"))
+            MANIFEST.write_text(json.dumps({"files": merged, "json": [
+                {"path": p, "key": k, "created": c} for (p, k), c in sorted(jsons.items())]},
+                indent=2) + "\n", encoding="utf-8")
 
     def install(self):
         self.prerequisites()
@@ -529,14 +533,57 @@ class Installer:
             if not self.dry:
                 self.run(["xcrun", "simctl", "uninstall", dev["udid"], RUNNER_ID])
 
+    def _repos_for_links(self):
+        """The repos from config.json and the repo the clone lives in: where links to our files may be."""
+        repos = []
+        try:
+            cfg = json.loads((TESTER / "config.json").read_text(encoding="utf-8"))
+            repos = [Path(p).expanduser() for p in (cfg.get("repos") or {}).values()]
+        except (OSError, ValueError, AttributeError):
+            pass
+        for parent in ROOT.parents:
+            if (parent / ".git").exists():
+                repos.append(parent)
+                break
+        return list(dict.fromkeys(r.resolve() for r in repos if r.is_dir()))
+
+    def _links_to(self, removed):
+        """Symlinks in the repos' .github/agents and .github/skills (also one folder deeper, e.g. a link to one
+        SKILL.md) that point at a file or skill folder this uninstall removes. Folder-level links (agents -> the
+        main repo's agents) are left alone: they are not ours and still point at a real folder."""
+        found = []
+        for repo in self._repos_for_links():
+            for sub in ("agents", "skills"):
+                stack = [(repo / ".github" / sub, 0)]
+                while stack:
+                    folder, level = stack.pop()
+                    if folder.is_symlink() or not folder.is_dir():
+                        continue
+                    for entry in sorted(folder.iterdir()):
+                        if entry.is_symlink():
+                            if Path(os.path.realpath(str(entry))) in removed:
+                                found.append(entry)
+                        elif entry.is_dir() and level < 1:
+                            stack.append((entry, level + 1))
+        return found
+
     def _uninstall(self):
         self._driver_cleanup()
+        removed = set()
         for path, sha in self.old.get("files", {}).items():
             p = Path(path)
             if not p.exists():
                 continue
             if self._sha(p.read_text(encoding="utf-8", errors="replace")) != sha and not self.a.force:
                 self.say("  KEPT     %s (edited since install; --force removes)" % p)
+                continue
+            removed.add(p.resolve())
+            if p.name == "SKILL.md":
+                removed.add(p.parent.resolve())
+        links = self._links_to(removed)            # before the targets go: realpath needs them
+        for path in self.old.get("files", {}):
+            p = Path(path)
+            if not p.exists() or p.resolve() not in removed:
                 continue
             self.say("  remove   %s" % p)
             if not self.dry:
@@ -555,8 +602,25 @@ class Installer:
             if MCP_NAME in data.get(item["key"], {}):
                 self.say("  unmerge  %s (%s.%s)" % (p, item["key"], MCP_NAME))
                 del data[item["key"]][MCP_NAME]
-                if not self.dry:
+                if item.get("created") and data == {item["key"]: {}}:
+                    self.say("  remove   %s (created by the installer, now empty)" % p)
+                    if not self.dry:
+                        p.unlink()
+                        try:
+                            p.parent.rmdir()  # only if now empty
+                        except OSError:
+                            pass
+                elif not self.dry:
                     p.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        for link in links:
+            self.say("  remove   link %s (pointed at a removed file)" % link)
+            if not self.dry:
+                link.unlink()
+                if link.parent.parent.name == "skills":
+                    try:
+                        link.parent.rmdir()  # a skill folder that held only the link
+                    except OSError:
+                        pass
         if not self.dry and MANIFEST.exists():
             MANIFEST.unlink()
         if not self.dry:

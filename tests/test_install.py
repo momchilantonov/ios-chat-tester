@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import shutil
 import tempfile
 import unittest
@@ -161,10 +162,20 @@ class InstallTest(unittest.TestCase):
         self.assertFalse((self.home / "agents" / "my-tester.agent.md").exists())
         self.assertFalse((self.home / "agents" / "my-tester-planner.agent.md").exists())
         self.assertFalse(skill.exists())
-        self.assertNotIn("simchat", json.loads((self.home / "mcp-config.json").read_text())["mcpServers"])
-        vs = json.loads((self.vscode / "mcp.json").read_text())
+        self.assertFalse((self.home / "mcp-config.json").exists(), out)   # the installer created it: now empty
+        vs = json.loads((self.vscode / "mcp.json").read_text())                 # existed before: kept, entry gone
         self.assertEqual(list(vs["servers"]), ["other"])
         self.assertTrue((self.clone / "tester" / "config.json").exists())
+
+    def test_uninstall_keeps_a_created_mcp_file_the_user_added_servers_to(self):
+        code, out = self.run_install("--bundle-id", "a.b")
+        self.assertEqual(code, 0, out)
+        cfg = self.home / "mcp-config.json"
+        data = json.loads(cfg.read_text())
+        data["mcpServers"]["mine"] = {"command": "x"}                          # added by hand after the install
+        cfg.write_text(json.dumps(data))
+        code, out = self.run_install("--uninstall", "--force")
+        self.assertEqual(json.loads(cfg.read_text()), {"mcpServers": {"mine": {"command": "x"}}})
 
     def test_into_main_repo_seen_through_a_submodule_symlink(self):
         """A main repo holds the agents; the submodule's .github/agents is a symlink to them. The installed file,
@@ -189,6 +200,49 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("WARN", out)
         self.assertIn(str(other.resolve()), out)
+
+    def test_uninstall_removes_per_file_links_and_the_mcp_file_it_created(self):
+        """Links one per file (bot repo -> main repo) to our files go with them; a link to another agent stays.
+        An MCP file the installer created goes too once it is empty; one that existed before stays."""
+        main = Path(self.tmp.name) / "main"
+        agents, skills = main / ".github" / "agents", main / ".github" / "skills"
+        agents.mkdir(parents=True)
+        skills.mkdir()
+        (agents / "other.agent.md").write_text("someone else's agent")
+        bot = main / "bot"
+        (bot / ".github" / "agents").mkdir(parents=True)
+        (bot / ".github" / "skills" / "test-plan-format").mkdir(parents=True)
+        code, out = self.run_install("--into", str(main), "--bot-repo", str(bot), "--bundle-id", "a.b",
+                                     "--no-vscode")
+        self.assertEqual(code, 0, out)
+        links = [bot / ".github" / "agents" / "chat-tester.agent.md",
+                 bot / ".github" / "agents" / "chat-tester-planner.agent.md",
+                 bot / ".github" / "skills" / "chat-testing",                       # a link to the folder
+                 bot / ".github" / "skills" / "test-plan-format" / "SKILL.md"]      # a link to the file
+        targets = [agents / "chat-tester.agent.md", agents / "chat-tester-planner.agent.md",
+                   skills / "chat-testing", skills / "test-plan-format" / "SKILL.md"]
+        for link, target in zip(links, targets):
+            link.symlink_to(target)
+        other = bot / ".github" / "agents" / "other.agent.md"
+        other.symlink_to(agents / "other.agent.md")
+        self.assertTrue((main / ".github" / "mcp.json").exists())
+        code, out = self.run_install("--uninstall", "--force")
+        self.assertEqual(code, 0, out)
+        for link in links:
+            self.assertFalse(os.path.lexists(str(link)), out)
+        self.assertFalse((bot / ".github" / "skills" / "test-plan-format").exists())   # held only the link
+        self.assertTrue(other.exists())
+        self.assertFalse((main / ".github" / "mcp.json").exists(), out)                  # created, now empty
+        self.assertTrue((main / ".github").is_dir())                                    # still has agents/
+
+    def test_uninstall_keeps_an_mcp_file_that_existed_before(self):
+        repo = Path(self.tmp.name) / "botrepo"
+        (repo / ".github").mkdir(parents=True)
+        (repo / ".github" / "mcp.json").write_text(json.dumps({"mcpServers": {}}))
+        self.run_install("--into", str(repo), "--bundle-id", "a.b", "--no-vscode")
+        self.run_install("--into", str(repo), "--bundle-id", "a.b", "--no-vscode")   # a re-install keeps the flag
+        code, out = self.run_install("--uninstall", "--force")
+        self.assertEqual(json.loads((repo / ".github" / "mcp.json").read_text()), {"mcpServers": {}})
 
     def test_into_repo_and_dry_run(self):
         repo = Path(self.tmp.name) / "botrepo"
