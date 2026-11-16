@@ -2,6 +2,7 @@
 import re
 import subprocess
 import unittest
+from pathlib import Path
 
 from helpers import ROOT, Stack
 from simchat.plan import lint_plan, parse_plan
@@ -167,7 +168,9 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(code, 0, out)
         launcher = (self.clone / "tester" / "bin" / "my-tester").read_text()
         cfg = self.clone / "tester" / "bin" / "mcp-config.json"
-        self.assertIn("--additional-mcp-config=@%s" % cfg, launcher)
+        found = re.search(r"--additional-mcp-config=@'?([^' ]+)", launcher)
+        self.assertIsNotNone(found, launcher)
+        self.assertEqual(Path(found.group(1)).resolve(), cfg.resolve())  # macOS: /var -> /private/var
         self.assertIn("simchat", cfg.read_text())
         res = subprocess.run(["bash", "-n", str(self.clone / "tester" / "bin" / "my-tester")], capture_output=True)
         self.assertEqual(res.returncode, 0, res.stderr)

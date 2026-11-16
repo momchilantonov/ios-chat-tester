@@ -68,7 +68,7 @@ class Round5Test(unittest.TestCase):
 
     # R5-2 the echo of "Keep consent." -------------------------------------------------------------------
     def test_echo_matches_label_with_ios_dot(self):
-        scr = Screen(raw({"label": "Keep consent", "x": 220, "y": 300, "w": 150},
+        scr = Screen(raw({"label": "Keep consent", "x": 200, "y": 300, "w": 150},
                          {"label": "Thanks, your consent is kept.", "x": 10, "y": 360}))
         self.assertEqual(new_messages([], scr, "Keep consent. "), ["Thanks, your consent is kept."])
 
@@ -136,7 +136,7 @@ class Round5Test(unittest.TestCase):
 
     def test_trailing_copy_of_an_old_bubble_is_not_new(self):
         scr = Screen(raw({"label": "Welcome", "x": 10, "y": 100},
-                         {"label": "Hello", "x": 220, "y": 160, "w": 150},
+                         {"label": "Hello", "x": 200, "y": 160, "w": 150},
                          {"label": "Hi there", "x": 10, "y": 220},
                          {"label": "Welcome", "x": 10, "y": 690}))
         self.assertEqual(new_messages(["Welcome"], scr, "Hello", seen=["Welcome"]), ["Hi there"])

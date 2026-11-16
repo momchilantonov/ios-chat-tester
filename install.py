@@ -308,9 +308,10 @@ class Installer:
                         "# Run it from the folder you want as the working directory (e.g. the bot repo).\n"
                         "for a in \"$@\"; do case \"$a\" in -p|--prompt|--prompt=*)\n"
                         "  echo \"note: non-interactive run (-p) - if MCP tools need interactive approval here (organisation \"\\\n"
-                        "\"policy), every simchat call is denied: run without -p.\" >&2;; esac; done\n"
+                        "\"policy), every simchat call is denied%s: run without -p.\" >&2;; esac; done\n"
                         "exec copilot --agent=%s%s%s %s \"$@\"\n"
                         % (agent_name, "" if self.a.ask_approval else ", simchat tools pre-approved",
+                           " and the planner prints the plan but cannot save it" if agent_name.endswith("-planner") else "",
                            agent_name, allow, mcp, add))
             self.write(TESTER / "bin" / agent_name, launcher, mode=0o755)
 

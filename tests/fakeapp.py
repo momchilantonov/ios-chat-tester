@@ -81,6 +81,12 @@ class FakeApp:
         self.nav_caption = False     # after a submit: a hidden copy of the submit button + its caption near the bar
         self.offscreen_copies = 0    # every bubble also has this many copies far above the screen (tree order first)
         self.answered_buttons = False  # answered quick replies stay in the history as disabled buttons
+        self.real_layout = False     # frames as in the real app: every bubble in a full-width cell; user bubble ends
+                                     # 40pt from the edge, bot bubble next to an avatar image, picker rows end 32pt
+                                     # from the edge in one cell with the Continue button
+        self.focus_delay = 0.0       # after a fresh launch the composer takes this long to accept keyboard focus
+        self.band_pair = False       # two overlapping texts above the composer; band_hidden turns them into ghosts
+        self.band_hidden = False
         self.lock = threading.Lock()
         self.received = []           # what the "bot" received: {"text"} or {"payload"}
         self.commands = []
@@ -113,6 +119,7 @@ class FakeApp:
         self.late_at = 0.0
         self.actions = []            # full-width action rows ("New transfer ›")
         self._nav_caption_on = False
+        self.focus_at = time.monotonic() + self.focus_delay  # focus works only from then on
         if self.welcome:
             self.messages.append(("bot", "Welcome! How can I help?"))
 
@@ -236,6 +243,18 @@ class FakeApp:
                             "h": 44, "enabled": False})
                 els.append({"type": "text", "label": row[2], "id": "", "value": "", "x": 20, "y": ry + 10, "w": 150,
                             "h": 24})
+            elif kind == "msg" and self.real_layout:
+                h = 200 if len(row[2]) > 80 else 50
+                els.append({"type": "cell", "label": "", "id": "", "value": "", "x": 0, "y": ry, "w": W, "h": h,
+                            "depth": 1})
+                if row[1] == "user":
+                    els.append({"type": "other", "label": row[2], "id": "", "value": "", "x": 126, "y": ry + 5,
+                                "w": 224, "h": h - 10, "depth": 2})
+                else:
+                    els.append({"type": "image", "label": "", "id": "bot-avatar", "value": "", "x": 16,
+                                "y": ry + h - 28, "w": 24, "h": 24, "depth": 2})
+                    els.append({"type": "other", "label": row[2], "id": "", "value": "", "x": 72, "y": ry + 5,
+                                "w": 235, "h": h - 10, "depth": 2})
             elif kind == "msg":
                 x = 150 if row[1] == "user" else 10
                 h = 200 if len(row[2]) > 80 else 50
@@ -259,7 +278,10 @@ class FakeApp:
                 els.append({"type": "text", "label": row[1], "id": "", "value": "", "x": 20, "y": ry + 10, "w": 150, "h": 24})
             elif kind == "row":
                 label, sel = self.rows[row[1]]
-                if self.rows_right:
+                if self.real_layout:
+                    els.append({"type": "text", "label": label, "id": "", "value": "", "x": 112, "y": ry + 16,
+                                "w": 246, "h": 17, "selected": sel, "_row": row[1], "depth": 2})
+                elif self.rows_right:
                     els.append({"type": "text", "label": label, "id": "", "value": "", "x": 180, "y": ry + 13,
                                 "w": 170, "h": 24, "selected": sel, "_row": row[1]})
                 elif self.rows_stacked:
@@ -302,6 +324,22 @@ class FakeApp:
             for j, t in enumerate(old):
                 els.append({"type": "text", "label": t, "id": "", "value": "", "x": 14 + 3 * j, "y": 700 + 8 * j,
                             "w": 220, "h": 40, "_hidden": True})
+        if self.real_layout:  # the picker rows and their Continue share one cell
+            idx = [i for i, e in enumerate(els) if "_row" in e or e["id"] == "qr.продължи"
+                   or (e["type"] == "text" and e["label"] == "Продължи")]
+            if idx and any("_row" in els[i] for i in idx):
+                first, last = idx[0], idx[-1]
+                part = els[first:last + 1]
+                top = min(e["y"] for e in part)
+                bottom = max(e["y"] + e["h"] for e in part)
+                for e in part:
+                    e["depth"] = 2
+                els.insert(first, {"type": "cell", "label": "", "id": "", "value": "", "x": 0, "y": top - 4,
+                                   "w": W, "h": bottom - top + 8, "depth": 1})
+        if self.band_pair:
+            for label, x, y in (("Block these cards?", 14, 700), ("Old echo", 111, 712)):
+                els.append({"type": "text", "label": label, "id": "", "value": "", "x": x, "y": y, "w": 220,
+                            "h": 40, "_hidden": self.band_hidden})
         if self.offscreen_copies:
             copies = [{"type": "text", "label": t, "id": "", "value": "", "x": 10, "y": -2000 - 50 * i, "w": 230, "h": 40}
                       for _, t in self.messages for i in range(self.offscreen_copies)]
@@ -424,7 +462,7 @@ class FakeApp:
                         text, self.value, self.cursor = self.value, "", 0
                         self._user(text)
                     return {}
-                if self.rows_as_text or self.rows_right:
+                if self.rows_as_text or self.rows_right or self.real_layout:
                     for e in self.elements():
                         if e["type"] == "text" and "_row" in e and self._hit(e, x, y):
                             self.rows[e["_row"]][1] = not self.rows[e["_row"]][1]
@@ -436,7 +474,7 @@ class FakeApp:
                     if e["type"] == "cell" and "_row" in e and self._hit(e, x, y):
                         self.rows[e["_row"]][1] = not self.rows[e["_row"]][1]
                         return {}
-                    if e["type"] == "cell" and self._hit(e, x, y):
+                    if e["type"] == "cell" and e["label"] and self._hit(e, x, y):  # a row cell (not a container)
                         for row in self.rows:
                             if row[0] == e["label"]:
                                 row[1] = not row[1]
@@ -464,7 +502,7 @@ class FakeApp:
                         return {}
                 return {}
             if cmd == "type":
-                if not self.focused:
+                if not self.focused or time.monotonic() < self.focus_at:
                     return {"error": "Neither element nor any descendant has keyboard focus."}
                 text = args["text"]
                 if self.mangle_typing > 0:

@@ -2,6 +2,40 @@
 
 Newest first. After pulling: `python3 install.py` (with your usual flags), then restart both agents.
 
+## Round 8 – requirements R8-1 … R8-7 from the seventh real run
+**After pulling:** run `install.py` (it rewrites the launchers), restart both agents. The driver is unchanged
+(version 3). No new config keys.
+
+**A – reports something that did not happen**
+- **R8-1 (blocker):** Round 7's "ends within 32pt of the right edge" rule is gone - in the real app picker rows end
+  closer to the edge (358) than the user's bubble (350). "User side" is now decided by structure: a text in a
+  cell that also holds the bot's avatar image or a button (a picker row next to Continue) is never the user's;
+  then the right half of the screen. After the first sent message the tool learns where the user's bubbles end
+  (±4pt) and requires that edge. The sent/tapped text stays the echo candidate at any y, also under the bars.
+- **R8-3:** the evidence check reduces widget markup to the text it shows (`[SELECT Your points\n0.0 PTS]` →
+  "Your points", "0.0 PTS", also across lines) and compares numbers loosely ("0.0" = "0," = "0").
+
+**B – hides something that did happen**
+- **R8-2:** with R8-1 the echo under the nav bar is found again, so the reply behind the banner is read by
+  scrolling (or returned in `under_bar`). Picker rows that share one cell with Continue are separate options.
+- **R8-5:** "hittable" answers are kept only until the next action, and `screen()` always asks again: a real
+  bubble above the composer can become a hidden copy at the same frame. Hidden copies stay hidden.
+
+**C – the rest**
+- **R8-4:** when typing fails with "no keyboard focus" (right after a fresh launch), the composer is tapped again
+  and typing is retried for up to 5 s - nothing is typed by the failed attempt.
+- **R8-6:** the launcher test compares resolved paths (macOS `/var` → `/private/var`).
+- **R8-7:** the planner launcher's `-p` line says the planner prints the plan but can't save it under `-p`.
+
+**Changed tests:** the two Round 5 fixtures changed in Round 7 are back at their original 40pt from the edge (as
+the real app). The fake app's tap no longer stops at an unlabelled container cell (the real app taps the
+button inside it).
+
+**Test again:**
+- R8-1 first: one FAQ question (no own prompt in `new_messages`), a chip Cancel, re-entry with the same prompt;
+- type a card name while the picker is shown (R8-2); an FAQ reply with a rich card (R8-3);
+- the first `send_message` right after `open_app(fresh=true)` (R8-4); `screen()` after a few flows (R8-5).
+
 ## Round 7 – requirements R7-1 … R7-7 from the sixth real run
 **After pulling:** run `install.py` (it rebuilds the driver - version 3 - and rewrites the launchers), restart
 both agents. If `status` shows `driver.outdated`: `stop_driver`, then `start_driver`. No new config keys.

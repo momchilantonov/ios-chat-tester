@@ -15,7 +15,8 @@ CONTAINER_TYPES = ("scrollView", "collectionView", "table")  # swipe targets suc
 CONTROL_TYPES = ("cell", "switch", "toggle", "checkBox", "radioButton", "slider", "segmentedControl",
                  "picker", "pickerWheel", "stepper")  # rich components: list rows, checkboxes, ...
 THIN_PT = 8.0  # scroll indicators are a few points wide; real text is never this thin
-RIGHT_EDGE_PT = 32.0  # the user's own bubbles end this close to the right screen edge (picker rows don't)
+EDGE_TOLERANCE_PT = 4.0  # the user's right-aligned bubbles all end at the same x (learned from a sent message)
+AVATAR_RX = re.compile(r"avatar", re.IGNORECASE)
 BAR_SLACK_PT = 2.0    # an element whose centre is this close below a bar's bottom edge still counts as under it
 ALERT_TYPES = ("alert", "sheet")
 BANNER_RX = re.compile(r"banner|toast|snackbar|notification", re.IGNORECASE)
@@ -149,6 +150,16 @@ class Screen:
                 selected=bool(e.get("selected", False)), x=float(e.get("x", 0)), y=float(e.get("y", 0)),
                 w=float(e.get("w", 0)), h=float(e.get("h", 0)), depth=int(e.get("depth") or 0)))
         self.hidden: set = set()  # indices of hidden copies (set by the tester after asking the driver)
+        self.user_right: Optional[float] = None  # right edge of the user's bubbles, once learned (set by the tester)
+        self._parent: Dict[int, Optional[int]] = {}
+        if len({e.depth for e in self.elements}) > 1:  # the snapshot's tree: each element's nearest listed ancestor
+            stack: List[Element] = []
+            for e in self.elements:
+                while stack and stack[-1].depth >= e.depth:
+                    stack.pop()
+                self._parent[e.index] = stack[-1].index if stack else None
+                stack.append(e)
+        self._cell_cache: Dict[int, Optional[Element]] = {}
         on = [e for e in self.elements if self.on_screen(e)]
         self._shown = [e for e in on if not self._under_chrome(e)]
         self._covered = [e for e in on if self._under_chrome(e)]  # under the nav bar or a top banner
@@ -157,17 +168,67 @@ class Screen:
                          and (not self.width or c.w < 0.9 * self.width)]
 
     # -- geometry -------------------------------------------------------------------------------
-    def user_side(self, e: Element) -> bool:
-        """The user's own bubbles (and tap echoes): right half, and the bubble - the element itself or a tight
-        wrapper around it - ends at the right screen edge. A picker row with the same text, whose centre may be
-        right of the middle too, ends well before the edge."""
-        if not self.width or e.x <= self.width * 0.12 or e.x + e.w / 2 <= self.width * 0.5:
-            return False
+    def cell_of(self, e: Element) -> Optional[Element]:
+        """The list cell that holds e (e itself if it is a cell): by the snapshot tree, else the smallest
+        cell whose frame contains it."""
+        if e.index in self._cell_cache:
+            return self._cell_cache[e.index]
+        cell: Optional[Element] = None
+        if self._parent:
+            i: Optional[int] = e.index
+            while i is not None:
+                if self.elements[i].type == "cell":
+                    cell = self.elements[i]
+                    break
+                i = self._parent.get(i)
+        else:
+            boxes = [c for c in self.elements if c.type == "cell" and (c.index == e.index or c.contains(e))]
+            cell = min(boxes, key=lambda c: c.w * c.h) if boxes else None
+        self._cell_cache[e.index] = cell
+        return cell
+
+    def _in_cell(self, cell: Element) -> List[Element]:
+        if self._parent:
+            out = []
+            for o in self.elements[cell.index + 1:]:
+                if o.depth <= cell.depth:
+                    break
+                out.append(o)
+            return out
+        return [o for o in self.elements if o.index != cell.index and cell.contains(o)]
+
+    def bot_cell(self, cell: Element) -> bool:
+        """A cell with the bot's avatar (an image at the left or with "avatar" in its id), or with a button (a
+        picker with its Continue, quick replies): never the user's own bubble."""
+        for o in self._in_cell(cell):
+            if o.type == "image" and (AVATAR_RX.search(o.id or o.label or "")
+                                      or (self.width and o.center[0] < self.width * 0.2)):
+                return True
+            if o.type == "button":
+                return True
+        return False
+
+    def right_edge(self, e: Element) -> float:
+        """Right edge of e's bubble: e itself, or a tight wrapper around it (a text inside its bubble)."""
         right = e.x + e.w
         for c in self._bubbles:
             if c.index != e.index and c.w <= e.w + 80 and c.contains(e):
                 right = max(right, c.x + c.w)
-        return right >= self.width - max(RIGHT_EDGE_PT, 0.08 * self.width)
+        return right
+
+    def user_side(self, e: Element) -> bool:
+        """The user's own bubbles (and tap echoes). Decided by structure first: a text in a cell that also holds
+        the bot's avatar or a button (a picker row next to its Continue) is never the user's. Then: right half of
+        the screen; and once the right edge of the user's bubbles is known (learned from a sent message), the
+        bubble must end there - picker rows and wide bot bubbles end elsewhere."""
+        if not self.width or e.x <= self.width * 0.12 or e.x + e.w / 2 <= self.width * 0.5:
+            return False
+        cell = self.cell_of(e)
+        if cell is not None and self.bot_cell(cell):
+            return False
+        if self.user_right is not None:
+            return abs(self.right_edge(e) - self.user_right) <= EDGE_TOLERANCE_PT
+        return True
 
     def covered(self, e: Element) -> bool:
         """On screen but under the navigation bar or a top banner: the user can't read it."""
@@ -568,7 +629,10 @@ def group_options(new: List[Element], buttons: List[Element], boxes: Sequence[El
     limit = min(below)
     cand = sorted([e for e in new[1:] if e.y + e.h <= limit + 1], key=lambda e: (e.y, e.x))
     def box_of(e: Element) -> Optional[int]:
-        inside = [b for b in boxes if b.index != e.index and b.contains(e) and not any(b.contains(n) for n in new[:1])]
+        # a row's own box: not one that also holds the question or a button (that is the whole picker - the real
+        # app puts every row and the Continue button into one cell)
+        inside = [b for b in boxes if b.index != e.index and b.contains(e) and not any(b.contains(n) for n in new[:1])
+                  and not any(b.contains(x) for x in buttons)]
         return min(inside, key=lambda b: b.w * b.h).index if inside else None
 
     # Without a cell around a row: lines at the same x stacked closer than the rows are spaced.

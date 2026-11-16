@@ -96,7 +96,8 @@ calls. Use the CLI to check the plumbing, and judge reply detection with the age
   simchat tools load in any folder.
 - If an organisation policy forces approval of MCP tools, answer "yes, for this session" once per tool, about
   10 times.
-- Non-interactive runs (`copilot -p`) are not possible under such a policy.
+- Non-interactive runs (`copilot -p`) are not possible under such a policy: the tester's tools are denied, and
+  the planner prints its plan but can't save it - run both interactively.
 
 **Model:** use the strongest available model (Opus-class) for both agents. Once things are stable, a
 Sonnet-class model may do for the tester: compare the results of the same plan. Avoid small or fast models.

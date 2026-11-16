@@ -29,20 +29,36 @@ VERDICTS = ("PASS", "FAIL", "BLOCKED", "INCOMPLETE", "INCONCLUSIVE")
 DRIVER_VERSION = 3     # SimDriverServer.swift "ping" version this code expects (2: "hittable", 3: its "frames")
 ECHO_WAIT_S = 2.0      # after a tap: how long to look for the user's own echo bubble
 MAX_SCROLL_UP = 3      # swipes to find the start of a reply that is longer than the screen
-_MARKER = re.compile(r"\[[A-Z][A-Z_-]{2,}[^\]]*\]")          # [QUICK-REPLY ...], [SELECT ...]
+_MARKER = re.compile(r"\[[A-Z][A-Z_-]{2,}(?:\s+|(?=\]))([^\]]*)\]")  # widget markup: [SELECT <title>\n0.0 PTS]
+_NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
 _MD_LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
 _URL = re.compile(r"https?://\S+")
 
 
 def _paragraphs(texts: List[str]) -> List[str]:
-    """Evidence texts as lines a chat may draw as separate bubbles, without option markers and link targets."""
+    """Evidence texts as lines a chat may draw as separate bubbles: widget markup ([SELECT ...], which may span
+    lines) reduced to the text it shows, markdown links to their text, URLs dropped."""
     out: List[str] = []
     for t in texts:
-        for line in str(t).splitlines():
-            line = _URL.sub("", _MD_LINK.sub(r"\1", _MARKER.sub("", line))).strip()
+        for line in _MARKER.sub(r"\1", str(t)).splitlines():
+            line = _URL.sub("", _MD_LINK.sub(r"\1", line)).strip()
             if len(key(line)) >= 3:
                 out.append(line)
     return out
+
+
+def _ekey(text: str) -> str:
+    """key() with numbers compared loosely: "0.0", "0," and "0" are the same; "12.50" = "12,5"."""
+    def num(m: "re.Match") -> str:
+        v = m.group(0).replace(",", ".")
+        return ("%f" % float(v)).rstrip("0").rstrip(".") if "." in v else v
+    return key(_NUMBER.sub(num, text or ""))
+
+
+def _missing(paragraphs: List[str], shown: List[str]) -> List[str]:
+    """Evidence paragraphs whose start is not among the texts shown on screen."""
+    hay = _ekey(" ".join(shown))
+    return [p for p in paragraphs if _ekey(p)[:60] not in hay]
 
 
 class ToolError(Exception):
@@ -161,6 +177,8 @@ class Tester:
         self._before_user_els: List[Element] = []
         self._own: List[str] = []                # what the user's last action shows on their side (sent/tapped/selected)
         self._dialog_texts: set = set()          # texts of an in-app dialog that is open
+        self._user_right: Optional[float] = None  # right edge of the user's bubbles, learned from a sent message
+        self._learn_from = ""                     # the text just sent, until its bubble was seen
         self._option_rows: List[List[str]] = []  # option rows of the latest reply (texts)
         self._selected: List[str] = []           # texts of rows/controls selected since the latest reply
         self._ev_base: Optional[int] = None  # reply-evidence item count at the last user action
@@ -216,19 +234,22 @@ class Tester:
             self._left_app = None
         return out
 
-    def _snapshot(self) -> Screen:
+    def _snapshot(self, recheck: bool = False) -> Screen:
         self._ensure_app()
-        return self._make_screen(self._call("snapshot"))
+        return self._make_screen(self._call("snapshot"), recheck)
 
-    def _make_screen(self, raw: Dict[str, Any]) -> Screen:
+    def _make_screen(self, raw: Dict[str, Any], recheck: bool = False) -> Screen:
         """A Screen without hidden copies: texts/buttons whose frames overlap another one's (real bubbles never
         overlap) and that the driver reports as not hittable. Never messages, anchors or tap targets."""
         scr = Screen(raw, ignore=self.chat.get("ignore_labels") or [])
+        scr.user_right = self._user_right
         cands = scr.overlapping() if not self._no_hittable else []
         if cands:
             def k(e: Element) -> tuple:
                 return (e.type, e.label, e.id, round(e.x), round(e.y), round(e.w), round(e.h))
-            unknown = [e for e in cands if k(e) not in self._hit_cache]
+            # a hidden copy stays hidden; a real bubble can turn into one at the same frame (the band above the
+            # composer), so "hittable" is asked again after each action and on every screen()
+            unknown = [e for e in cands if k(e) not in self._hit_cache or (recheck and self._hit_cache[k(e)] is not False)]
             if unknown:
                 res = self._hittable(unknown)
                 if res:  # the driver answered: a frame it did not find stays unknown (None), asked once
@@ -305,6 +326,7 @@ class Tester:
         self._ev_base_all, self._ev_base = (len(items[0]), len(items[1])) if items is not None else (None, None)
         self._anchor = anchor
         self._own = [anchor] + list(self._selected) if anchor else []
+        self._hit_cache = {k: v for k, v in self._hit_cache.items() if v is False}
         self._set_before(before, exclude)
         self._turn_offsets = self._log_sizes()
         self._turn_wall = time.time()
@@ -317,6 +339,22 @@ class Tester:
         self._before_user_els = [m for m in msgs if scr.user_side(m)]
         self._before_user = [m.text for m in self._before_user_els]
         self._before_scr = scr
+
+    def _maybe_learn(self, scr: Screen) -> None:
+        """The newest bubble with the text just sent is the user's own: remember where it ends. All the user's
+        bubbles are right-aligned to the same x, so this separates them from picker rows and wide bot bubbles."""
+        text = self._learn_from
+        if self._user_right is not None or not text:
+            return
+        mine = [m for m in scr.messages(covered=True) if norm(m.text) == norm(text)]
+        if len(mine) <= len([t for t in self._before if norm(t) == norm(text)]):
+            return  # not drawn yet
+        self._learn_from = ""
+        cands = [m for m in mine if scr.user_side(m)]
+        if cands:
+            e = max(cands, key=lambda m: m.y)
+            self._user_right = round(scr.right_edge(e), 1)
+            self._journal({"action": "learned", "user_right_edge": self._user_right})
 
     def _mine_now(self, scr: Screen) -> List[str]:
         """The user's bubbles from before the action that are still on screen: the chat may have scrolled them
@@ -454,7 +492,7 @@ class Tester:
 
     # ---------------------------------------------------------------- looking
     def screen(self, image: bool = False) -> Dict[str, Any]:
-        scr = self._snapshot()
+        scr = self._snapshot(recheck=True)
         self.shown = scr
         comp = scr.composer(self.chat)
         send = scr.send_button(self.chat, comp)
@@ -908,13 +946,37 @@ class Tester:
             raise ToolError("could not clear the text field - nothing was sent", value=cur.value)
         return cur
 
+    FOCUS_WAIT_S = 5.0  # right after a fresh launch the composer can take a few seconds to accept focus
+
+    def _type_focused(self, field: Element, text: str) -> None:
+        """Type; if the driver says nothing has keyboard focus (nothing was typed), tap the composer again and
+        retry for up to FOCUS_WAIT_S."""
+        try:
+            self._call("type", text=text)
+            return
+        except ToolError as exc:
+            if "keyboard focus" not in str(exc):
+                raise
+        deadline = self.clock() + self.FOCUS_WAIT_S
+        self._tap_end(field)
+        while True:
+            self.sleep(0.5)
+            try:
+                self._call("type", text=text)
+                self._journal({"action": "type_retry", "reason": "no keyboard focus yet"})
+                return
+            except ToolError as exc:
+                if "keyboard focus" not in str(exc) or self.clock() >= deadline:
+                    raise ToolError("the composer did not take keyboard focus within %ss - nothing was typed"
+                                    % self.FOCUS_WAIT_S, driver=str(exc))
+
     def _type_into(self, field: Element, text: str) -> Element:
         self._pace()
         self._tap_end(field)
         for attempt in (1, 2):
             cur = self._clear(field)
             self._pace()
-            self._call("type", text=text)
+            self._type_focused(cur, text)
             scr = self._snapshot()
             cur = scr.locate(field) or scr.composer(self.chat) or cur
             if exact(cur.value) == exact(text):
@@ -963,6 +1025,7 @@ class Tester:
             raise ToolError("Send button not found - nothing was sent (field cleared). Set chat.send_labels or "
                             "chat.send_ids in config.json", buttons=[b.describe() for b in scr.buttons()])
         self._mark_turn(text, before, [comp])
+        self._learn_from = text
         self._pace()
         self._call("tap", x=send.center[0], y=send.center[1])
         self._journal({"action": "send", "text": text, "composer": comp.describe(), "send": send.describe()})
@@ -972,7 +1035,9 @@ class Tester:
         while True:
             scr = self._snapshot()
             cur = scr.locate(typed) or scr.composer(self.chat)
-            bubble = any(norm(m.text) == norm(text) for m in scr.messages([cur], covered=True))
+            mine = [m for m in scr.messages([cur], covered=True) if norm(m.text) == norm(text)]
+            bubble = bool(mine)
+            self._maybe_learn(scr)
             if (cur is not None and scr.is_empty_input(cur)) or bubble:
                 out = {"sent": text, "confirmed": True, "next": "call wait_for_reply"}
                 self._auto_session(out)
@@ -985,6 +1050,9 @@ class Tester:
 
     def _observe(self, scr: Screen, ev_texts: List[str]) -> Dict[str, Any]:
         """What is new on this screen since the user's last action."""
+        if self._learn_from and self._user_right is None:
+            self._maybe_learn(scr)
+            scr.user_right = self._user_right
         comp = scr.composer(self.chat)
         rx = [re.compile(p, re.IGNORECASE) for p in self.chat.get("interim_labels") or [] if p]
         busy = scr.typing_elements(self.chat)
@@ -1020,9 +1088,9 @@ class Tester:
     @staticmethod
     def _ev_shown(ev_texts: List[str], shown: List[str]) -> bool:
         """Every paragraph of the bot's new reply is on screen (the start of each is enough)."""
-        hay = key(" ".join(shown))
+        hay = _ekey(" ".join(shown))
         paras = _paragraphs(ev_texts)
-        return bool(paras) and all(key(p)[:30] in hay for p in paras)
+        return bool(paras) and all(_ekey(p)[:30] in hay for p in paras)
 
     def wait_for_reply(self, timeout_s: Optional[float] = None, quiet_ms: Optional[float] = None) -> Dict[str, Any]:
         """Wait until new bot content appeared and the screen stopped changing.
@@ -1069,7 +1137,7 @@ class Tester:
                         msgs = scr.messages([comp_])
                         paras = _paragraphs(ev_texts)
                         drawn = (bool(msgs) and msgs[0].index == o["real"][0].index and bool(paras)
-                                 and key(paras[-1])[:30] in key(" ".join(shown)))
+                                 and _ekey(paras[-1])[:30] in _ekey(" ".join(shown)))
                 if ev_new and on_screen and settled and not typing and drawn:
                     break
                 if ev_new and settled and now - ev_seen_at >= grace:
@@ -1168,9 +1236,8 @@ class Tester:
                     out["note_options"] = ("the bot sent options that are not on screen: %s - not rendered "
                                            "(possible app/bot bug) or scrolled away; check screen()" % missing)
             if texts and (o["new_el"] or o["covered"] or o["cards"]):
-                hay = key(" ".join([m.text for m in scr.messages([comp])] + extra + o["cards"]
-                                   + [b.label for b in buttons] + [a.text for a in acts]))
-                gone = [p_ for p_ in _paragraphs(texts) if key(p_)[:60] not in hay]
+                gone = _missing(_paragraphs(texts), [m.text for m in scr.messages([comp])] + extra + o["cards"]
+                                + [b.label for b in buttons] + [a.text for a in acts])
                 if gone:
                     out["evidence_texts_missing"] = [g[:300] for g in gone]
                     out["note_missing"] = ("not on screen: scrolled away or not rendered (possible app bug) - check "
