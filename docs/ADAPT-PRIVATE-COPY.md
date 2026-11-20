@@ -1,94 +1,70 @@
-# Prompt: adapt a private copy of this tool
+# Prompt: make a private copy of this tool
 
-**For the human.** You made a private repo from this tool's files (one commit, no history), and its folder
-holds the copied files, not committed yet. Start Copilot in the folder that contains both the public clone and
-the new folder, and say:
+**For the human.** You created an empty private repo and cloned it next to this public clone (same parent
+folder). Nothing is committed in it yet; earlier copies or edits in it don't matter. Start Copilot in the
+parent folder and say:
 
 ```text
 Follow ios-chat-tester/docs/ADAPT-PRIVATE-COPY.md for the folder <new folder>
 ```
 
+The result: the tool's files, a README for users of your private repo (how to install and use the agents; no
+development history), without `CHANGELOG.md` and `GUIDE_FOR_AGENTS.md`. Nothing is committed.
+
 ---
 
-**For the agent.** Adapt the documentation of the folder the human named (TARGET) so it describes that private
-repository instead of the public one. Change **only** the text listed below, in TARGET only. Don't change code,
-tests, templates, earlier CHANGELOG sections or anything in the public clone. **Don't commit or push.**
+**For the agent.** Run the commands below **in order**, from the parent folder that holds both `ios-chat-tester`
+and the new folder. Replace `<new folder>` with the folder the human named. Don't change anything else, don't
+improvise steps, **don't commit or push**. If a check fails, stop and report it to the human.
 
-## 0. Values and preconditions
-Run in TARGET and note the values:
-- `NEW_URL` = output of `git -C TARGET remote get-url origin`
-- `NEW_NAME` = the last part of `NEW_URL` without `.git`. It must equal TARGET's folder name; if not, stop and
-  ask the human which name to use.
-- `OLD_URL` = `https://github.com/momchilantonov/ios-chat-tester.git`
-- `OLD_NAME` = `ios-chat-tester`
-
-Stop and ask the human if any of these is not true:
-- `git -C TARGET log` has no commits yet (the files are uncommitted).
-- `grep -c "OLD_URL" TARGET/README.md` prints `4` (the README is still the original). If it isn't, it can be
-  restored with `git -C ios-chat-tester show HEAD:README.md > TARGET/README.md`.
-
-## 1. README.md
-1. Title: `# iOS chat tester` becomes `# iOS chat tester (NEW_NAME)`.
-2. Every `OLD_URL` becomes `NEW_URL` (the clone commands in "Quick start", "Case 1", "Case 2" and "Case 2b").
-3. Every remaining `OLD_NAME` becomes `NEW_NAME`: the example in the placeholder table, the paths in "Quick
-   start", the `cd` lines in "Case 2" and "Case 2b", and the line `.github/OLD_NAME/` in "Case 2", step 3.
-4. In "2. What you need", add this as the first bullet (with the real NEW_URL):
-   ```markdown
-   - **Read access to NEW_URL** (a private repository). If `git clone` says *Repository not found*, ask its
-     owner for access.
-   ```
-5. Nothing else in the README changes.
-
-## 2. GUIDE_FOR_AGENTS.md
-1. Under **Ground rules**, replace the first bullet (`This repository is **public**. ...` up to
-   `tester/runs/*`.) with exactly:
-   ```markdown
-   - This repository is **private** to the organisation. Commit or push only when the human asks. Keep
-     machine-specific and personal values (paths, bundle ids, session ids, test-user data) out of tracked files:
-     they belong in the git-ignored local files `tester/config.json`, `tester/profile.md`, `tester/plans/*` and
-     `tester/runs/*`. Never write customer data or credentials anywhere.
-   ```
-2. In **6. Evaluate and report back**:
-   - replace the line `The report reaches the maintainer as **photos of the screen**. Nothing from this machine
-     is uploaded.` with `The report is for the human and the maintainers of this repository. It stays on this
-     machine unless the human shares it.`
-   - keep the bullet `Write it to tester/runs/REPORT-FOR-MAINTAINER.md ...` unchanged;
-   - replace the bullet `Make it readable in a few photos: ...` (all its lines) with
-     `- Keep it short and in English, the most important items first.`
-   - replace the bullet `Keep it free of project data: ...` (all its lines) with
-     `- No customer data and no credentials. Project, flow and field names are fine.`
-   - keep the rest of section 6 unchanged.
-3. In **Local changes and updates**, replace the first bullet (`This clone is **read-only for you**: ...` up to
-   `and you pull.`) with exactly:
-   ```markdown
-   - Update with `git pull`. Change tracked files, commit or push only when the human asks. A change to the tool
-     gets a section in `CHANGELOG.md` and must keep `python3 -m unittest discover -s tests` passing.
-   ```
-   Keep the other bullets.
-
-## 3. tester/profile.example.md
-Replace `here - it stays in your repository, it is not part of the public chat-tester project.` with
-`here - it stays on this machine (git-ignored) and is never committed to the tool's repository.`
-
-## 4. CHANGELOG.md
-Insert after the line that starts with `Newest first.`, followed by an empty line:
-```markdown
-## Private copy: NEW_NAME
-**After pulling:** nothing to do. No code changes.
-
-- Documentation adapted for this private repository: its address and folder name in the README, a note on
-  access, and rules for agents (GUIDE_FOR_AGENTS.md, profile example) that no longer describe a public repo.
+## 1. Values and checks
+```bash
+T="<new folder>"
+NEW_URL=$(git -C "$T" remote get-url origin)
+NEW_NAME=$(basename "$NEW_URL" .git)
+echo "T=$T  NEW_URL=$NEW_URL  NEW_NAME=$NEW_NAME"
+git -C "$T" rev-list --all --count                        # must print 0 (no commits yet)
+ls "$T/tester/config.json" "$T/tester/profile.md" 2>/dev/null   # must print nothing
+ls ios-chat-tester/docs/private-copy/README.template.md    # must exist
 ```
-(with the real NEW_NAME).
+- `NEW_NAME` must equal the folder name `$T`. If not, stop and ask the human.
+- If `config.json` or `profile.md` exist in `$T/tester/`, stop: they are the human's settings.
 
-## 5. Verify, show, stop
-Run in TARGET and report each result:
-- `grep -rn -i "momchil\|ios-chat-tester\|public" README.md GUIDE_FOR_AGENTS.md tester/profile.example.md`
-  prints nothing.
-- `grep -c "NEW_URL" README.md` prints `5` (4 clone commands and the access note).
-- `find . -path ./.git -prune -o -type f -print | wc -l` still prints the same number as before (no file
-  added or removed).
-- `git log` still has no commits.
+## 2. Start from the original files
+Removes everything in `$T` except `.git`, then copies the files of the public clone's current version.
+```bash
+find "$T" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+git -C ios-chat-tester archive HEAD | tar -x -C "$T"
+rm -rf "$T/docs"
+```
 
-Then show the human every changed passage as **old → new**, and stop. The human reviews it and makes the first
-commit.
+## 3. The README for the private repo
+```bash
+sed "s|{{REPO_URL}}|$NEW_URL|g; s|{{REPO_NAME}}|$NEW_NAME|g" \
+    ios-chat-tester/docs/private-copy/README.template.md > "$T/README.md"
+```
+
+## 4. Remove what belongs to the public project's development
+```bash
+rm "$T/GUIDE_FOR_AGENTS.md" "$T/CHANGELOG.md"
+grep -v -e '^REPORT-FOR-MAINTAINER.md$' -e '^TEST_AGENT_REQUIREMENTS.md$' "$T/.gitignore" > "$T/.gitignore.new" && mv "$T/.gitignore.new" "$T/.gitignore"
+perl -pi -e 's/here - it stays in your repository, it is not part of the public chat-tester project\./here - it stays on this machine (git-ignored) and is never committed to this repository./' "$T/tester/profile.example.md"
+```
+
+## 5. Verify
+```bash
+grep -rn -i "momchil\|ios-chat-tester\|GUIDE_FOR_AGENTS\|CHANGELOG\|REPORT-FOR-MAINTAINER\|TEST_AGENT_REQUIREMENTS\|{{REPO_URL}}\|{{REPO_NAME}}" "$T" --exclude-dir=.git   # must print nothing
+grep -n -i "public" "$T/README.md" "$T/tester/profile.example.md"                                                      # must print nothing
+grep -c "$NEW_URL" "$T/README.md"                                         # must print 5
+find "$T" -path "$T/.git" -prune -o -type f -print | wc -l                # must print 43
+git -C "$T" rev-list --all --count                                        # must print 0
+```
+`grep` ends with exit code 1 when it finds nothing - that is the expected result here.
+
+## 6. Report and stop
+Tell the human, in a short table: each check, what it printed, OK or not. Then the next step for the human:
+review `README.md`, then commit and push:
+```bash
+cd "<new folder>" && git add -A && git commit -m "Import iOS chat tester" && git push -u origin main
+```
+Don't run that yourself.
