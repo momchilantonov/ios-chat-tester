@@ -1,8 +1,10 @@
 """Regression tests for the problems found on the first real run (real SDK chat in the Simulator)."""
+
 import json
 import unittest
 
 from helpers import Stack
+from simchat.tester import ToolError
 
 
 class RealWorldTest(unittest.TestCase):
@@ -26,8 +28,11 @@ class RealWorldTest(unittest.TestCase):
         self.assertEqual(first["new_messages"], ["Днес", "Welcome! How can I help?"])
         self.t.send_message("Hello")
         rep = self.t.wait_for_reply()
-        self.assertEqual(rep["new_messages"], ["Hi! I can help with cards and payments."])
-        self.assertGreaterEqual(rep["waited_s"], 0.9)  # did not return before the real reply
+        self.assertEqual(
+            rep["new_messages"], ["Hi! I can help with cards and payments."]
+        )
+        # did not return before the real reply
+        self.assertGreaterEqual(rep["waited_s"], 0.9)
         self.t.tap(text="Cards")
         self.assertEqual(self.t.wait_for_reply()["new_messages"], ["Which card?"])
 
@@ -44,7 +49,9 @@ class RealWorldTest(unittest.TestCase):
         self.s.cfg["chat"]["ignore_labels"] = ["^test message \\d+$"]
         self.app.banner = "test message 2"
         self.t.open_app(fresh=True)
-        self.assertEqual(self.t.wait_for_reply()["new_messages"], ["Welcome! How can I help?"])
+        self.assertEqual(
+            self.t.wait_for_reply()["new_messages"], ["Welcome! How can I help?"]
+        )
         self.assertNotIn("test message 2", self.t.screen()["messages"])
 
     def test_prefilled_composer_is_cleared_before_typing(self):
@@ -58,7 +65,9 @@ class RealWorldTest(unittest.TestCase):
         self.s.cfg["app"]["after_launch"] = ["Open chat"]
         res = self.t.open_app(fresh=True)
         self.assertEqual(res["navigated"], ["Open chat"])
-        self.assertEqual(self.t.wait_for_reply()["new_messages"], ["Welcome! How can I help?"])
+        self.assertEqual(
+            self.t.wait_for_reply()["new_messages"], ["Welcome! How can I help?"]
+        )
         self.s.cfg["app"]["after_launch"] = [{"tap": "Nope", "wait_s": 0.5}]
         with self.assertRaises(Exception) as ctx:
             self.t.open_app(fresh=True)
@@ -69,8 +78,13 @@ class RealWorldTest(unittest.TestCase):
         rep = self.t.wait_for_reply()
         # rows between the question and the disabled Continue come back as options (and as controls)
         self.assertEqual(rep["new_messages"], ["Select the cards to block:"])
-        self.assertEqual([o.split("] ", 1)[1] for o in rep["options"]], ["Visa ****1111", "Mastercard ****2222"])
-        self.assertTrue(any("(disabled)" in b and "Продължи" in b for b in rep["buttons"]))
+        self.assertEqual(
+            [o.split("] ", 1)[1] for o in rep["options"]],
+            ["Visa ****1111", "Mastercard ****2222"],
+        )
+        self.assertTrue(
+            any("(disabled)" in b and "Продължи" in b for b in rep["buttons"])
+        )
         rows = [c for c in rep["controls"] if "Visa" in c]
         self.assertEqual(len(rows), 1)
         idx = int(rows[0].split("]")[0][1:])
@@ -92,11 +106,14 @@ class RealWorldTest(unittest.TestCase):
             with self.assertRaises(Exception) as ctx:
                 self.t.send_message("Cards")
             self.assertIn("tap(element=", str(ctx.exception))
-            self.assertEqual(self.app.received[-1], {"text": "Hello"})   # nothing was typed or sent
+            # nothing was typed or sent
+            self.assertEqual(self.app.received[-1], {"text": "Hello"})
             idx = int(str(ctx.exception).split("tap(element=")[1].split(")")[0])
-            self.t.tap(element=idx)                                      # the suggested element works
+            self.t.tap(element=idx)  # the suggested element works
             self.assertEqual(self.app.received[-1], {"payload": "/cards"})
-            expected = ["Which card?", "Debit", "Credit"] if as_other else ["Which card?"]
+            expected = (
+                ["Which card?", "Debit", "Credit"] if as_other else ["Which card?"]
+            )
             self.assertEqual(self.t.wait_for_reply()["new_messages"], expected)
 
     def test_typing_an_option_label_when_the_plan_says_so(self):
@@ -108,13 +125,14 @@ class RealWorldTest(unittest.TestCase):
     def test_repeating_own_message_is_not_refused(self):
         self.app.silent = True
         self.t.send_message("здравей")
-        self.t.send_message("здравей")   # the user's own bubble with the same text is on screen
+        # the user's own bubble with the same text is on screen
+        self.t.send_message("здравей")
         self.assertEqual(self.app.received, [{"text": "здравей"}, {"text": "здравей"}])
 
     def test_session_id_from_app_log_then_fetch(self):
         self.s.simctl.app_log = [
             "2026-11-13 15:01:02.1 Df ChatDemo[1:2] [Kit] connecting",
-            "2026-11-13 15:01:03.4 Db ChatDemo[1:2] [Kit] POST /webhook sender_id=\"abc-123-xyz\"",
+            '2026-11-13 15:01:03.4 Db ChatDemo[1:2] [Kit] POST /webhook sender_id="abc-123-xyz"',
         ]
         res = self.t.find_session_id()
         self.assertEqual(res["current"], "abc-123-xyz")
@@ -124,22 +142,28 @@ class RealWorldTest(unittest.TestCase):
         self.assertEqual(self.t.fetch("conversation")["url"], url)
         log = self.t.app_log(since="minutes", grep="webhook")
         self.assertEqual(len(log["lines"]), 1)
-        spawn = [c for c in self.s.simctl.calls if c[:3] == ["xcrun", "simctl", "spawn"]][-1]
+        spawn = [
+            c for c in self.s.simctl.calls if c[:3] == ["xcrun", "simctl", "spawn"]
+        ][-1]
         self.assertIn('process == "ChatDemo"', spawn)
 
     def test_session_id_from_bot_log_and_manual(self):
         with open(self.s.log, "a") as fh:
-            fh.write("INFO tracker id: conv_777aaa received\nINFO session_id=conv_888bbb\n")
+            fh.write(
+                "INFO tracker id: conv_777aaa received\nINFO session_id=conv_888bbb\n"
+            )
         res = self.t.find_session_id()
-        self.assertEqual([c["id"] for c in res["candidates"]], ["conv_888bbb", "conv_777aaa"])
+        self.assertEqual(
+            [c["id"] for c in res["candidates"]], ["conv_888bbb", "conv_777aaa"]
+        )
         self.assertIsNone(res["current"])
-        with self.assertRaises(Exception):
+        with self.assertRaises(ToolError):
             self.t.fetch("conversation")
         self.t.set_session_id("conv_888bbb")
         url = "http://127.0.0.1:8000/conversations/conv_888bbb"
         self.s.http[url] = "{}"
         self.assertEqual(self.t.fetch("conversation")["url"], url)
-        with self.assertRaises(Exception):
+        with self.assertRaises(ToolError):
             self.t.set_session_id("bad id with spaces")
 
 

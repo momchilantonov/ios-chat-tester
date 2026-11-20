@@ -1,0 +1,11 @@
+# Settings for the code checkers only: Ruff (lint + format) and Pylance/pyright.
+# The tool itself needs no packages; it runs on Python 3.11+ with the standard library.
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.pyright]
+pythonVersion = "3.11"
+include = ["install.py", "tester", "tests"]
+extraPaths = ["tester", "tests"]

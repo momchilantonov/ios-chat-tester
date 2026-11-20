@@ -2,6 +2,7 @@ import json
 import unittest
 
 from helpers import Stack
+from simchat.tester import ToolError
 
 
 class TesterTest(unittest.TestCase):
@@ -27,14 +28,20 @@ class TesterTest(unittest.TestCase):
         self.assertTrue(res["confirmed"])
         rep = self.t.wait_for_reply()
         self.assertTrue(rep["replied"])
-        self.assertEqual(rep["new_messages"], ["Hi! I can help with cards and payments."])
-        self.assertEqual([b.split("] ", 1)[1] for b in rep["buttons"]], ["Cards", "Payments"])
+        self.assertEqual(
+            rep["new_messages"], ["Hi! I can help with cards and payments."]
+        )
+        self.assertEqual(
+            [b.split("] ", 1)[1] for b in rep["buttons"]], ["Cards", "Payments"]
+        )
         self.assertEqual(self.s.app.received, [{"text": "Hello"}])
 
     def test_unicode_message(self):
         self.t.send_message("Здравей")
         rep = self.t.wait_for_reply()
-        self.assertEqual(rep["new_messages"], ["Hi! I can help with cards and payments."])
+        self.assertEqual(
+            rep["new_messages"], ["Hi! I can help with cards and payments."]
+        )
         self.assertEqual(self.s.app.received, [{"text": "Здравей"}])
 
     def test_tap_quick_reply_by_index_sends_payload(self):
@@ -102,14 +109,18 @@ class TesterTest(unittest.TestCase):
         return int(line.split("]")[0][1:])
 
     def test_swipe_carousel_left_and_right(self):
-        self.s.app.carousel = ["Debit card *1111", "Credit card *2222", "Debit card *3333"]
+        self.s.app.carousel = [
+            "Debit card *1111",
+            "Credit card *2222",
+            "Debit card *3333",
+        ]
         idx = self._carousel_index()
         res = self.t.swipe("left", element=idx)
         self.assertTrue(res["changed"])
         self.assertEqual(res["now_visible"], ["Credit card *2222"])
         self.assertEqual(res["no_longer_visible"], ["Debit card *1111"])
         sw = self.s.app.swipes[-1]
-        self.assertGreater(sw["x1"], sw["x2"])               # finger moved left
+        self.assertGreater(sw["x1"], sw["x2"])  # finger moved left
         self.assertEqual(sw["y1"], sw["y2"])
         self.assertEqual(sw["speed"], "normal")
         res = self.t.swipe("right", element=self._carousel_index(), speed="fast")
@@ -123,12 +134,12 @@ class TesterTest(unittest.TestCase):
         res = self.t.swipe("up")
         self.assertEqual(res["on"], "screen centre")
         sw = self.s.app.swipes[-1]
-        self.assertGreater(sw["y1"], sw["y2"])                # finger moved up
+        self.assertGreater(sw["y1"], sw["y2"])  # finger moved up
         for v in (sw["x1"], sw["x2"], sw["y1"], sw["y2"]):
             self.assertTrue(2 <= v <= 842)
-        with self.assertRaises(Exception):
+        with self.assertRaises(ToolError):
             self.t.swipe("sideways")
-        with self.assertRaises(Exception):
+        with self.assertRaises(ToolError):
             self.t.swipe("left", speed="warp")
 
     def test_long_press_opens_menu(self):
@@ -137,7 +148,7 @@ class TesterTest(unittest.TestCase):
         self.assertIn("Copy", res["now_visible"])
         last = [c for c in self.s.app.commands if c[0] == "long_press"][-1][1]
         self.assertEqual(last["duration"], 0.8)
-        with self.assertRaises(Exception):
+        with self.assertRaises(ToolError):
             self.t.long_press()
 
     def test_screen_listing(self):
@@ -155,21 +166,26 @@ class TesterTest(unittest.TestCase):
         end = self.t.end_run("summary", verdict="PASS")
         self.assertEqual(end["verdict"], "FAIL")
         from pathlib import Path
+
         run_dir = Path(st["run_dir"])
         for f in ("journal.jsonl", "run.json", "transcript.json", "log-bot.txt"):
             self.assertTrue((run_dir / f).exists(), f)
         transcript = json.loads((run_dir / "transcript.json").read_text())
         self.assertEqual(transcript[0], {"from": "user", "text": "Hello"})
         self.t.start_run("empty")
-        self.assertEqual(self.t.end_run("nothing", verdict="PASS")["verdict"], "INCONCLUSIVE")
+        self.assertEqual(
+            self.t.end_run("nothing", verdict="PASS")["verdict"], "INCONCLUSIVE"
+        )
         self.t.start_run("blocked")
-        self.assertEqual(self.t.end_run("bot down", verdict="BLOCKED")["verdict"], "BLOCKED")
+        self.assertEqual(
+            self.t.end_run("bot down", verdict="BLOCKED")["verdict"], "BLOCKED"
+        )
 
     def test_check_needs_evidence_and_run(self):
-        with self.assertRaises(Exception):
+        with self.assertRaises(ToolError):
             self.t.check("x", True, "e")
         self.t.start_run("r")
-        with self.assertRaises(Exception):
+        with self.assertRaises(ToolError):
             self.t.check("x", True, "  ")
 
     def test_write_file_is_confined(self):
@@ -177,20 +193,35 @@ class TesterTest(unittest.TestCase):
         ok = self.t.write_file(st["run_dir"] + "/report.md", "# r")
         self.assertTrue(ok["written"].endswith("report.md"))
         for bad in ("../../etc/x.md", "/tmp/x.md", st["run_dir"] + "/x.sh"):
-            with self.assertRaises(Exception):
+            with self.assertRaises(ToolError):
                 self.t.write_file(bad, "x")
 
     def test_fetch_local_only_vars_path_and_saved(self):
         url = "http://127.0.0.1:8000/conversations/abc%20d"
-        self.s.http[url] = json.dumps({"events": [{"event": "user", "text": "Hello"}, {"event": "bot", "text": "Hi"}]})
+        self.s.http[url] = json.dumps(
+            {
+                "events": [
+                    {"event": "user", "text": "Hello"},
+                    {"event": "bot", "text": "Hi"},
+                ]
+            }
+        )
         self.t.start_run("f")
-        res = self.t.fetch("conversation", vars={"session_id": "abc d"}, path="events[-1].text")
+        res = self.t.fetch(
+            "conversation", vars={"session_id": "abc d"}, path="events[-1].text"
+        )
         self.assertEqual(json.loads(res["data"]), "Hi")
         self.assertTrue(res["saved"].endswith(".json"))
-        self.assertEqual(json.loads(self.t.fetch("conversation", {"session_id": "abc d"}, "events.*.event")["data"]),
-                         ["user", "bot"])
+        self.assertEqual(
+            json.loads(
+                self.t.fetch("conversation", {"session_id": "abc d"}, "events.*.event")[
+                    "data"
+                ]
+            ),
+            ["user", "bot"],
+        )
         for bad in (("remote", {}), ("conversation", {}), ("nope", {})):
-            with self.assertRaises(Exception):
+            with self.assertRaises(ToolError):
                 self.t.fetch(*bad)
 
     def test_read_log_since_turn(self):
@@ -204,7 +235,10 @@ class TesterTest(unittest.TestCase):
         self.assertEqual(res["lines"], ["handled message", "ERROR something broke"])
         self.assertEqual(res["error_count"], 1)
         self.assertIn("before turn", self.t.read_log(since="run")["lines"])
-        self.assertEqual(self.t.read_log(since="run", grep="broke")["lines"], ["ERROR something broke"])
+        self.assertEqual(
+            self.t.read_log(since="run", grep="broke")["lines"],
+            ["ERROR something broke"],
+        )
 
     def test_driver_down_is_a_clear_error(self):
         self.s.server.close()

@@ -1,4 +1,5 @@
 """Regression tests for the second real run (planner + tester against the real chat)."""
+
 import json
 import unittest
 
@@ -18,25 +19,25 @@ class Round2Test(unittest.TestCase):
     def _menu_twice(self):
         self.t.send_message("Hello")
         self.t.wait_for_reply()
-        self.t.tap(text="Payments")          # old menu now goes stale
+        self.t.tap(text="Payments")  # old menu now goes stale
         self.t.wait_for_reply()
-        self.t.send_message("hello")          # the same menu is offered again
+        self.t.send_message("hello")  # the same menu is offered again
         self.t.wait_for_reply()
 
     def test_tap_by_text_prefers_the_newest_copy(self):
-        self.app.stale_y = 150                # stale copies above the latest user message
+        self.app.stale_y = 150  # stale copies above the latest user message
         self._menu_twice()
         res = self.t.tap(text="Cards")
         self.assertNotIn("no_visible_effect", res)
         self.assertEqual(self.app.received[-1], {"payload": "/cards"})
 
     def test_tap_with_no_effect_is_reported(self):
-        self.app.stale_y = 700                # stale copies drawn low - ranking picks one
+        self.app.stale_y = 700  # stale copies drawn low - ranking picks one
         self._menu_twice()
         res = self.t.tap(text="Cards")
         self.assertTrue(res.get("no_visible_effect"), res)
         self.assertTrue(res["other_copies"])
-        self.assertEqual(self.app.received[-1], {"text": "hello"})   # nothing was sent
+        self.assertEqual(self.app.received[-1], {"text": "hello"})  # nothing was sent
 
     def test_carousel_cards_are_not_messages(self):
         self.app.carousel = ["Card A", "Card B"]
@@ -45,20 +46,38 @@ class Round2Test(unittest.TestCase):
         first = self.t.wait_for_reply()
         self.assertEqual(first["new_messages"], ["Welcome! How can I help?"])
         self.assertEqual(first["new_carousel_cards"], ["Card A"])
-        idx = int(next(l for l in self.t.screen()["elements"] if " collectionView " in l).split("]")[0][1:])
+        idx = int(
+            next(
+                l for l in self.t.screen()["elements"] if " collectionView " in l
+            ).split("]")[0][1:]
+        )
         self.t.swipe("left", element=idx)
         self.t.send_message("Hello")
         rep = self.t.wait_for_reply()
-        self.assertEqual(rep["new_messages"], ["Hi! I can help with cards and payments."])
+        self.assertEqual(
+            rep["new_messages"], ["Hi! I can help with cards and payments."]
+        )
         self.assertNotIn("Card B", rep["new_messages"])
 
     def _evidence_endpoint(self):
-        self.s.cfg["reply_evidence"] = {"endpoint": "conversation", "list": "events",
-                                        "match": {"event": "bot"}, "text": "text"}
+        self.s.cfg["reply_evidence"] = {
+            "endpoint": "conversation",
+            "list": "events",
+            "match": {"event": "bot"},
+            "text": "text",
+        }
         url = "http://127.0.0.1:8000/conversations/sess-1"
-        self.s.http[url] = lambda: json.dumps({"events": [
-            {"event": "bot" if who == "bot" else "user", "text": text + (" Second paragraph." if who == "bot" else "")}
-            for who, text in self.app.messages]})
+        self.s.http[url] = lambda: json.dumps(
+            {
+                "events": [
+                    {
+                        "event": "bot" if who == "bot" else "user",
+                        "text": text + (" Second paragraph." if who == "bot" else ""),
+                    }
+                    for who, text in self.app.messages
+                ]
+            }
+        )
         self.t.set_session_id("sess-1")
 
     def test_identical_reply_detected_via_endpoint(self):
@@ -66,8 +85,11 @@ class Round2Test(unittest.TestCase):
         self.t.send_message("foo")
         first = self.t.wait_for_reply()
         self.assertEqual(first["new_messages"], ["Sorry, I did not understand: foo"])
-        self.assertEqual(first["evidence_texts"], ["Sorry, I did not understand: foo Second paragraph."])
-        self.t.send_message("foo")            # same question -> identical reply
+        self.assertEqual(
+            first["evidence_texts"],
+            ["Sorry, I did not understand: foo Second paragraph."],
+        )
+        self.t.send_message("foo")  # same question -> identical reply
         rep = self.t.wait_for_reply()
         self.assertTrue(rep["replied"], rep)
         self.assertEqual(rep["evidence_new_replies"], 1)

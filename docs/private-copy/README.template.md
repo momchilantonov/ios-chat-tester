@@ -14,7 +14,7 @@ It works with **GitHub Copilot CLI** (terminal) and **VS Code with Copilot**. Yo
 
 `<name>` is the name you choose when you install, e.g. `my-tester`.
 
-- **No dependencies:** Python 3.9+ (standard library) and Xcode. No pip, npm, Homebrew or accounts.
+- **No dependencies:** Python 3.11+ (standard library) and Xcode. No pip, npm, Homebrew or accounts.
 - **Nothing leaves your Mac:** the tools talk only to the Simulator and to `127.0.0.1`.
 - **Any language:** typing goes through Apple's XCTest, so Unicode and emoji work.
 
@@ -74,7 +74,8 @@ runs in the background in the Simulator, and you don't need to touch it.
 - **Read access to this repository:** `{{REPO_URL}}` is private. If `git clone` says *Repository not found*,
   ask its owner for access.
 - A **Mac** with **Xcode**. Your app builds and runs in the iOS Simulator from Xcode.
-- **Python 3.9 or newer**: `python3 --version` (macOS ships one with Xcode's command line tools).
+- **Python 3.11 or newer**: `python3 --version`. If it says 3.9 (the macOS built-in), use `python3.11` (or the full
+  path of a 3.11+ Python) instead of `python3` in the install commands. The tool then keeps using that Python.
 - **GitHub Copilot CLI** (`copilot --version`) and/or **VS Code with GitHub Copilot**.
 - Your **bot running locally** (for example on `127.0.0.1:<port>`), the way your team normally runs it.
 - Optional but recommended: the bot writing its log to a file, e.g. `<start command> 2>&1 | tee ~/chat-logs/bot.log`.
@@ -599,7 +600,7 @@ Files you edited by hand are kept; add `--force` to remove them too. Afterwards 
 | `--copilot-home DIR` | Copilot's user folder for case 1 (default `~/.copilot` or `$COPILOT_HOME`). |
 | `--vscode-dir DIR` | VS Code's user folder (default `~/Library/Application Support/Code/User`). |
 | `--no-vscode` | Don't register the tool for VS Code. |
-| `--python PATH` | The Python that runs the tool (default: the one running `install.py`). |
+| `--python PATH` | The Python 3.11+ that runs the tool (default: the one running `install.py`). |
 | `--ask-approval` | Copilot asks before every tap or message. |
 | `--skip-build` | Don't build the UI driver. |
 | `--dry-run` | Only show what would happen. Also with `--uninstall`. |
@@ -651,5 +652,6 @@ tester/
   profile.example.md      → profile.md (yours)
   plans/                  test plans and results (yours are git-ignored)
   runs/                   one folder per run (git-ignored)
+pyproject.toml            settings for Ruff and Pylance (code checkers only)
 tests/                    self-checks of the tool: python3 -m unittest discover -s tests   (no simulator needed)
 ```

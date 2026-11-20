@@ -1,4 +1,5 @@
 """Talks to the SimDriver XCTest server and manages its process and the simulator (xcrun simctl)."""
+
 from __future__ import annotations
 
 import json
@@ -8,8 +9,9 @@ import signal
 import socket
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 from .config import HOME
 
@@ -24,13 +26,19 @@ class DriverError(Exception):
 
 
 class DriverClient:
-    def __init__(self, port: int, token: str = "", host: str = "127.0.0.1", timeout: float = 90.0):
+    def __init__(
+        self, port: int, token: str = "", host: str = "127.0.0.1", timeout: float = 90.0
+    ):
         self.host, self.port, self.token, self.timeout = host, port, token, timeout
 
-    def call(self, cmd: str, **args: Any) -> Dict[str, Any]:
-        request = json.dumps({"token": self.token, "cmd": cmd, "args": args}, ensure_ascii=False)
+    def call(self, cmd: str, **args: Any) -> dict[str, Any]:
+        request = json.dumps(
+            {"token": self.token, "cmd": cmd, "args": args}, ensure_ascii=False
+        )
         try:
-            with socket.create_connection((self.host, self.port), timeout=self.timeout) as sock:
+            with socket.create_connection(
+                (self.host, self.port), timeout=self.timeout
+            ) as sock:
                 sock.sendall(request.encode("utf-8") + b"\n")
                 chunks = []
                 while True:
@@ -41,12 +49,14 @@ class DriverClient:
                     if b"\n" in chunk:
                         break
         except OSError as exc:
-            raise DriverError("driver not reachable on %s:%s (%s)" % (self.host, self.port, exc))
+            raise DriverError(
+                f"driver not reachable on {self.host}:{self.port} ({exc})"
+            )
         raw = b"".join(chunks).split(b"\n", 1)[0]
         try:
             reply = json.loads(raw.decode("utf-8"))
         except ValueError:
-            raise DriverError("driver sent an invalid reply: %r" % raw[:200])
+            raise DriverError(f"driver sent an invalid reply: {raw[:200]!r}")
         if not reply.get("ok"):
             raise DriverError(str(reply.get("error") or "driver error"))
         return reply
@@ -58,31 +68,43 @@ class DriverClient:
             return False
 
 
-Runner = Callable[[List[str]], "subprocess.CompletedProcess[str]"]
+Runner = Callable[[list[str]], "subprocess.CompletedProcess[str]"]
 
 
-def run(cmd: List[str], timeout: float = 60) -> "subprocess.CompletedProcess[str]":
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+def run(cmd: list[str], timeout: float = 60) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        cmd, capture_output=True, text=True, timeout=timeout, check=False
+    )
 
 
 class Simulator:
     """xcrun simctl helpers. Works on whatever simulator is already booted unless a UDID is pinned."""
 
-    def __init__(self, cfg: Dict[str, Any], runner: Runner = run):
+    def __init__(self, cfg: dict[str, Any], runner: Runner = run):
         self.cfg, self.runner = cfg, runner
 
-    def booted(self) -> List[Dict[str, str]]:
+    def booted(self) -> list[dict[str, str]]:
         try:
             res = self.runner(["xcrun", "simctl", "list", "devices", "booted", "-j"])
         except (OSError, subprocess.SubprocessError) as exc:
-            raise DriverError("xcrun simctl not available (%s) - is Xcode installed?" % exc)
+            raise DriverError(
+                f"xcrun simctl not available ({exc}) - is Xcode installed?"
+            )
         if res.returncode != 0:
-            raise DriverError("simctl failed: %s" % (res.stderr or res.stdout).strip()[:300])
+            raise DriverError(
+                f"simctl failed: {(res.stderr or res.stdout).strip()[:300]}"
+            )
         devices = []
         for runtime, items in json.loads(res.stdout).get("devices", {}).items():
             for d in items:
                 if d.get("state") == "Booted":
-                    devices.append({"udid": d["udid"], "name": d.get("name", ""), "runtime": runtime})
+                    devices.append(
+                        {
+                            "udid": d["udid"],
+                            "name": d.get("name", ""),
+                            "runtime": runtime,
+                        }
+                    )
         return devices
 
     def udid(self) -> str:
@@ -90,28 +112,40 @@ class Simulator:
         booted = self.booted()
         if pinned:
             if not any(d["udid"] == pinned for d in booted):
-                raise DriverError("pinned simulator %s is not booted - boot it in Xcode/Simulator" % pinned)
+                raise DriverError(
+                    f"pinned simulator {pinned} is not booted - boot it in Xcode/Simulator"
+                )
             return pinned
         if not booted:
-            raise DriverError("no booted simulator - start one from Xcode (Run the app) or Simulator.app")
+            raise DriverError(
+                "no booted simulator - start one from Xcode (Run the app) or Simulator.app"
+            )
         if len(booted) > 1:
-            names = ", ".join("%s (%s)" % (d["name"], d["udid"]) for d in booted)
-            raise DriverError("several simulators are booted (%s) - set simulator.udid in config.json" % names)
+            names = ", ".join("{} ({})".format(d["name"], d["udid"]) for d in booted)
+            raise DriverError(
+                f"several simulators are booted ({names}) - set simulator.udid in config.json"
+            )
         return booted[0]["udid"]
 
     def show(self, udid: str) -> None:
         """Bring Simulator.app to the front so a human can watch the run."""
         if self.cfg["simulator"].get("open_simulator_app", True):
             try:
-                self.runner(["open", "-a", "Simulator", "--args", "-CurrentDeviceUDID", udid])
+                self.runner(
+                    ["open", "-a", "Simulator", "--args", "-CurrentDeviceUDID", udid]
+                )
             except (OSError, subprocess.SubprocessError):
                 pass
 
     def screenshot(self, udid: str, path: Path, max_px: int = 1000) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
-        res = self.runner(["xcrun", "simctl", "io", udid, "screenshot", "--type=png", str(path)])
+        res = self.runner(
+            ["xcrun", "simctl", "io", udid, "screenshot", "--type=png", str(path)]
+        )
         if res.returncode != 0 or not path.exists():
-            raise DriverError("screenshot failed: %s" % (res.stderr or res.stdout).strip()[:300])
+            raise DriverError(
+                f"screenshot failed: {(res.stderr or res.stdout).strip()[:300]}"
+            )
         try:  # macOS built-in image tool; keeps images small for the model
             self.runner(["sips", "-Z", str(max_px), str(path)])
         except (OSError, subprocess.SubprocessError):
@@ -130,12 +164,23 @@ def _pid_alive(pid: int) -> bool:
 class DriverManager:
     """Starts/stops the driver process (only the one we started) and hands out clients."""
 
-    def __init__(self, cfg: Dict[str, Any], sim: Simulator,
-                 popen: Callable[..., Any] = subprocess.Popen, clock: Callable[[], float] = time.monotonic,
-                 sleep: Callable[[float], None] = time.sleep):
-        self.cfg, self.sim, self.popen, self.clock, self.sleep = cfg, sim, popen, clock, sleep
+    def __init__(
+        self,
+        cfg: dict[str, Any],
+        sim: Simulator,
+        popen: Callable[..., Any] = subprocess.Popen,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ):
+        self.cfg, self.sim, self.popen, self.clock, self.sleep = (
+            cfg,
+            sim,
+            popen,
+            clock,
+            sleep,
+        )
 
-    def _state(self) -> Dict[str, Any]:
+    def _state(self) -> dict[str, Any]:
         try:
             return json.loads(STATE_FILE.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -146,9 +191,11 @@ class DriverManager:
         if not dcfg.get("manage", True):
             return DriverClient(int(dcfg["port"]), dcfg.get("token", ""))
         state = self._state()
-        return DriverClient(int(state.get("port", dcfg["port"])), state.get("token", ""))
+        return DriverClient(
+            int(state.get("port", dcfg["port"])), state.get("token", "")
+        )
 
-    def status(self) -> Dict[str, Any]:
+    def status(self) -> dict[str, Any]:
         state = self._state()
         alive = self.client().alive()
         pid = state.get("pid")
@@ -165,20 +212,22 @@ class DriverManager:
             out["log_tail"] = self.log_tail(12)
         return out
 
-    def log_tail(self, lines: int = 20) -> List[str]:
+    def log_tail(self, lines: int = 20) -> list[str]:
         try:
             text = LOG_FILE.read_text(encoding="utf-8", errors="replace")
         except OSError:
             return []
         return [ln for ln in text.splitlines() if ln.strip()][-lines:]
 
-    def ensure(self, wait_s: float = 50) -> Dict[str, Any]:
+    def ensure(self, wait_s: float = 50) -> dict[str, Any]:
         """Start the driver if needed and wait up to wait_s for it. Returns status()."""
         st = self.status()
         if st["phase"] == "ready":
             return st
         if not self.cfg["driver"].get("manage", True):
-            raise DriverError("driver not reachable and driver.manage is false - start it yourself")
+            raise DriverError(
+                "driver not reachable and driver.manage is false - start it yourself"
+            )
         if st["phase"] == "stopped":
             udid = self.sim.udid()
             self.sim.show(udid)
@@ -188,14 +237,39 @@ class DriverManager:
             BUILD_DIR.mkdir(parents=True, exist_ok=True)
             env = dict(os.environ)
             if self.cfg["driver"].get("xcodebuild_args"):
-                env["SIMCHAT_XCODEBUILD_ARGS"] = str(self.cfg["driver"]["xcodebuild_args"])
-            log = open(LOG_FILE, "w", encoding="utf-8")
-            proc = self.popen(["bash", str(DRIVER_DIR / "run-driver.sh"), udid, bundle, str(port), token],
-                              stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                              cwd=str(DRIVER_DIR), env=env, start_new_session=True)
-            log.close()
-            STATE_FILE.write_text(json.dumps({"pid": proc.pid, "port": port, "token": token, "udid": udid,
-                                              "bundle_id": bundle, "started": time.time()}), encoding="utf-8")
+                env["SIMCHAT_XCODEBUILD_ARGS"] = str(
+                    self.cfg["driver"]["xcodebuild_args"]
+                )
+            with open(LOG_FILE, "w", encoding="utf-8") as log:
+                proc = self.popen(
+                    [
+                        "bash",
+                        str(DRIVER_DIR / "run-driver.sh"),
+                        udid,
+                        bundle,
+                        str(port),
+                        token,
+                    ],
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL,
+                    cwd=str(DRIVER_DIR),
+                    env=env,
+                    start_new_session=True,
+                )
+            STATE_FILE.write_text(
+                json.dumps(
+                    {
+                        "pid": proc.pid,
+                        "port": port,
+                        "token": token,
+                        "udid": udid,
+                        "bundle_id": bundle,
+                        "started": time.time(),
+                    }
+                ),
+                encoding="utf-8",
+            )
         deadline = self.clock() + wait_s
         while self.clock() < deadline:
             st = self.status()
@@ -204,11 +278,14 @@ class DriverManager:
             self.sleep(1.0)
         st = self.status()
         if st["phase"] == "stopped":
-            raise DriverError("driver process exited - see log_tail / %s: %s"
-                              % (LOG_FILE, " | ".join(self.log_tail(8))))
+            raise DriverError(
+                "driver process exited - see log_tail / {}: {}".format(
+                    LOG_FILE, " | ".join(self.log_tail(8))
+                )
+            )
         return st
 
-    def stop(self) -> Dict[str, Any]:
+    def stop(self) -> dict[str, Any]:
         state = self._state()
         try:
             self.client().call("stop")

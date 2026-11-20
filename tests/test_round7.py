@@ -1,13 +1,14 @@
 """Regression tests for the sixth real run (QA requirements R7-1 ... R7-7)."""
+
 import re
 import subprocess
 import unittest
 from pathlib import Path
 
-from helpers import ROOT, Stack
+import test_install
+from helpers import ROOT, Stack, must_search
 from simchat.plan import lint_plan, parse_plan
 from simchat.tester import ToolError
-import test_install
 from test_round3 import evidence
 
 CARDS = [["VISA CLASSIC", False], ["DEBIT MASTERCARD", False]]
@@ -33,40 +34,48 @@ class Round7Test(unittest.TestCase):
 
     # R7-1 the user's echo under the nav bar / banner ---------------------------------------------------------
     def test_reentry_with_the_echo_under_the_nav_bar(self):
-        self.app.echo_top = 40                      # the app scrolls the user's bubble under the nav bar
+        self.app.echo_top = 40  # the app scrolls the user's bubble under the nav bar
         first = self._ask("pick")
         self.assertEqual(first["new_messages"], ["Select the cards to block:"])
         self.t.tap(text="Visa ****1111")
         self.t.tap(text="Продължи")
-        self.assertEqual(self.t.wait_for_reply()["new_messages"], ["Do you want to block the selected cards?"])
+        self.assertEqual(
+            self.t.wait_for_reply()["new_messages"],
+            ["Do you want to block the selected cards?"],
+        )
         self.t.tap(text="Cancel")
         self.t.wait_for_reply()
-        again = self._ask("pick")                   # the same start prompt again: the picker is new
+        again = self._ask("pick")  # the same start prompt again: the picker is new
         self.assertEqual(again["new_messages"], ["Select the cards to block:"])
-        self.assertEqual(labels(again["options"]), ["Visa ****1111", "Mastercard ****2222"])
+        self.assertEqual(
+            labels(again["options"]), ["Visa ****1111", "Mastercard ****2222"]
+        )
 
     def test_typed_option_name_with_the_reply_behind_a_banner(self):
         evidence(self.s)
         self.s.cfg["chat"]["ignore_labels"] = ["^Demo build$"]
-        self.app.toast = "Demo build"               # a banner under the nav bar (y 95-145)
+        self.app.toast = "Demo build"  # a banner under the nav bar (y 95-145)
         self.app.echo_top = 40
-        self.app.rows_right = True                  # picker rows right of the middle, not at the right edge
+        # picker rows right of the middle, not at the right edge
+        self.app.rows_right = True
         self.app.pick_rows = CARDS
         self.t.open_app(fresh=True)
         self.t.wait_for_reply()
         first = self._ask("pick")
         self.assertEqual(first["new_messages"], ["Select the cards to block:"])
         rep = self._ask("VISA CLASSIC", allow_button_text=True)
-        self.assertEqual(rep["new_messages"], [QUESTION])   # read by scrolling, never the picker row as anchor
+        # read by scrolling, never the picker row as anchor
+        self.assertEqual(rep["new_messages"], [QUESTION])
         self.assertEqual(labels(rep["options"]), ["VISA CLASSIC", "DEBIT MASTERCARD"])
         self.assertNotIn("evidence_texts_missing", rep)
-        self.assertNotIn("app_alerts", rep)                  # the ignored demo banner is no alert
+        self.assertNotIn("app_alerts", rep)  # the ignored demo banner is no alert
 
     # R7-2 picker submit -----------------------------------------------------------------------------------
     def test_submit_reports_only_the_confirm_question(self):
         self.app.rows_as_text = True
-        self.app.submit_echo = True                 # a 4-line echo: name and number of both cards
-        self.app.nav_caption = True                 # a hidden submit button + caption appear near the bar
+        self.app.submit_echo = True  # a 4-line echo: name and number of both cards
+        # a hidden submit button + caption appear near the bar
+        self.app.nav_caption = True
         self.app.echo_top = 40
         self._ask("pick")
         self.t.tap(text="Visa")
@@ -74,21 +83,35 @@ class Round7Test(unittest.TestCase):
         res = self.t.tap(text="Продължи")
         self.assertNotIn("tap_mismatch", res)
         rep = self.t.wait_for_reply()
-        self.assertEqual(rep["new_messages"], ["Do you want to block the selected cards?"])
+        self.assertEqual(
+            rep["new_messages"], ["Do you want to block the selected cards?"]
+        )
         self.assertEqual(labels(rep["buttons"]), ["Confirm", "Cancel"])
 
     # R7-3 a ghost with many copies ------------------------------------------------------------------------
     def test_ghost_of_a_frequent_emoji_text_is_marked(self):
         self.app.ghost_band = True
-        self.app.offscreen_copies = 13              # more copies than the old driver looked at (12)
+        self.app.offscreen_copies = 13  # more copies than the old driver looked at (12)
         self.t.open_app(fresh=True)
         self.t.wait_for_reply()
-        self.assertEqual(self._ask("anything")["new_messages"], ["Anything else I can do for you? 😊"])
-        self.assertEqual(self._ask("hello")["new_messages"], ["Hi! I can help with cards and payments."])
+        self.assertEqual(
+            self._ask("anything")["new_messages"],
+            ["Anything else I can do for you? 😊"],
+        )
+        self.assertEqual(
+            self._ask("hello")["new_messages"],
+            ["Hi! I can help with cards and payments."],
+        )
         scr = self.t.screen()
-        ghosts = [ln for ln in scr["elements"] if "Anything else" in ln and "HIDDEN-COPY" in ln]
+        ghosts = [
+            ln
+            for ln in scr["elements"]
+            if "Anything else" in ln and "HIDDEN-COPY" in ln
+        ]
         self.assertEqual(len(ghosts), 1, scr["elements"])
-        self.assertLessEqual(scr["messages"].count("Anything else I can do for you? 😊"), 1)
+        self.assertLessEqual(
+            scr["messages"].count("Anything else I can do for you? 😊"), 1
+        )
 
     # R7-4 dialog after wait_for_reply ---------------------------------------------------------------------
     def test_dialog_stays_an_alert_after_wait_for_reply(self):
@@ -96,10 +119,12 @@ class Round7Test(unittest.TestCase):
         self.app.dialog = True
         rep = self.t.wait_for_reply()
         self.assertEqual(rep["app_alerts"][-1]["kind"], "dialog")
-        scr = self.t.screen()                        # later: still the dialog, not chat text
+        scr = self.t.screen()  # later: still the dialog, not chat text
         dlg = scr["app_alerts"][-1]
         self.assertEqual(dlg["kind"], "dialog")
-        self.assertNotIn("Are you sure you want to end the conversation?", scr["messages"])
+        self.assertNotIn(
+            "Are you sure you want to end the conversation?", scr["messages"]
+        )
         with self.assertRaises(ToolError) as ctx:
             self.t.send_message("hello")
         msg = str(ctx.exception)
@@ -111,25 +136,28 @@ class Round7Test(unittest.TestCase):
     # R7-5 planner ----------------------------------------------------------------------------------------
     def test_planner_example_passes_the_plan_check(self):
         text = (ROOT / "templates" / "planner.md").read_text(encoding="utf-8")
-        plan = parse_plan(re.search(r"<!-- plan2 -->\s*```markdown\n(.*?)```", text, re.S).group(1))
+        plan = parse_plan(
+            must_search(
+                r"<!-- plan2 -->\s*```markdown\n(.*?)```", text, re.DOTALL
+            ).group(1)
+        )
         self.assertEqual(lint_plan(plan), [])
         prompts = [r["prompt"] for r in plan["rows"]]
         self.assertIn("type: VISA CLASSIC", prompts)
         self.assertIn("warnings", text)
 
     def test_plan_check_flags_positional_disabled_and_missing_branches(self):
-        bad = parse_plan("\n".join([
-            "## Conversation 1: picker", "| Flow | User prompt | Expected | Result |", "|---|---|---|---|",
-            "| f | I want to block a card | the card list | |",
-            "| f | select first row | selected | |",
-            "| f | tap Continue with empty selection | re-prompt | |"]))
+        bad = parse_plan(
+            "## Conversation 1: picker\n| Flow | User prompt | Expected | Result |\n|---|---|---|---|\n| f | I want to block a card | the card list | |\n| f | select first row | selected | |\n| f | tap Continue with empty selection | re-prompt | |"
+        )
         warnings = " ".join(lint_plan(bad))
         for part in ("not by position", "disabled control", "type:", "re-entry"):
             self.assertIn(part, warnings)
 
     # R7-6 stale controls ----------------------------------------------------------------------------------
     def test_answered_continue_is_not_a_current_button(self):
-        self.app.answered_buttons = True            # answered buttons stay in the history, disabled
+        # answered buttons stay in the history, disabled
+        self.app.answered_buttons = True
         self._ask("pick")
         self.t.tap(text="Visa ****1111")
         self.t.tap(text="Продължи")
@@ -144,18 +172,24 @@ class Round7Test(unittest.TestCase):
         self._ask("pick")
         for selected in (False, True):
             scr = self.t.screen()
-            self.assertEqual(labels(scr["options"]), ["Visa · ****1111", "Mastercard · ****2222"])
-            self.assertFalse({"Visa", "****1111", "Mastercard", "****2222"} & set(scr["messages"]))
+            self.assertEqual(
+                labels(scr["options"]), ["Visa · ****1111", "Mastercard · ****2222"]
+            )
+            self.assertFalse(
+                {"Visa", "****1111", "Mastercard", "****2222"} & set(scr["messages"])
+            )
             self.assertIn("Select the cards to block:", scr["messages"])
             if not selected:
-                self.t.tap(text="Visa")             # Continue becomes enabled: the rows are still options
+                # Continue becomes enabled: the rows are still options
+                self.t.tap(text="Visa")
 
 
 class LauncherTest(unittest.TestCase):
     """R7-7: the launcher brings its own MCP config and says clearly what -p means."""
 
     def setUp(self):
-        self.h = test_install.InstallTest("run_install")  # its temp copy of the repo, not its tests
+        # its temp copy of the repo, not its tests
+        self.h = test_install.InstallTest("run_install")
         self.h.setUp()
         self.clone, self.app_repo = self.h.clone, self.h.app_repo
 
@@ -163,16 +197,27 @@ class LauncherTest(unittest.TestCase):
         self.h.tearDown()
 
     def test_launcher_passes_the_mcp_config(self):
-        code, out = self.h.run_install("--name", "my-tester", "--bundle-id", "com.example.App", "--app-repo",
-                                     str(self.app_repo), "--yes")
+        code, out = self.h.run_install(
+            "--name",
+            "my-tester",
+            "--bundle-id",
+            "com.example.App",
+            "--app-repo",
+            str(self.app_repo),
+            "--yes",
+        )
         self.assertEqual(code, 0, out)
         launcher = (self.clone / "tester" / "bin" / "my-tester").read_text()
         cfg = self.clone / "tester" / "bin" / "mcp-config.json"
-        found = re.search(r"--additional-mcp-config=@'?([^' ]+)", launcher)
-        self.assertIsNotNone(found, launcher)
-        self.assertEqual(Path(found.group(1)).resolve(), cfg.resolve())  # macOS: /var -> /private/var
+        found = must_search(r"--additional-mcp-config=@'?([^' ]+)", launcher)
+        # macOS: /var -> /private/var
+        self.assertEqual(Path(found.group(1)).resolve(), cfg.resolve())
         self.assertIn("simchat", cfg.read_text())
-        res = subprocess.run(["bash", "-n", str(self.clone / "tester" / "bin" / "my-tester")], capture_output=True)
+        res = subprocess.run(
+            ["bash", "-n", str(self.clone / "tester" / "bin" / "my-tester")],
+            capture_output=True,
+            check=False,
+        )
         self.assertEqual(res.returncode, 0, res.stderr)
         note = [ln for ln in launcher.splitlines() if "echo" in ln]
         self.assertEqual(len(note), 1)

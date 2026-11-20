@@ -1,7 +1,7 @@
 import re
 import unittest
 
-from helpers import ROOT
+from helpers import ROOT, must_search
 
 DRIVER = ROOT / "tester" / "driver"
 
@@ -11,7 +11,9 @@ class DriverProjectTest(unittest.TestCase):
 
     def test_pbxproj_references_are_defined(self):
         text = (DRIVER / "SimDriver.xcodeproj" / "project.pbxproj").read_text()
-        defined = set(re.findall(r"^\s*([0-9A-F]{24}) (?:/\*.*?\*/ )?= \{", text, re.M))
+        defined = set(
+            re.findall(r"^\s*([0-9A-F]{24}) (?:/\*.*?\*/ )?= \{", text, re.MULTILINE)
+        )
         used = set(re.findall(r"\b([0-9A-F]{24})\b", text))
         self.assertTrue(defined)
         self.assertEqual(used - defined, set())
@@ -20,9 +22,19 @@ class DriverProjectTest(unittest.TestCase):
 
     def test_scheme_points_at_the_target(self):
         pbx = (DRIVER / "SimDriver.xcodeproj" / "project.pbxproj").read_text()
-        target = re.search(r"([0-9A-F]{24}) /\* SimDriverUITests \*/ = \{\s*isa = PBXNativeTarget", pbx).group(1)
-        scheme = (DRIVER / "SimDriver.xcodeproj" / "xcshareddata" / "xcschemes" / "SimDriver.xcscheme").read_text()
-        self.assertEqual(set(re.findall(r'BlueprintIdentifier = "(\w+)"', scheme)), {target})
+        target = must_search(
+            r"([0-9A-F]{24}) /\* SimDriverUITests \*/ = \{\s*isa = PBXNativeTarget", pbx
+        ).group(1)
+        scheme = (
+            DRIVER
+            / "SimDriver.xcodeproj"
+            / "xcshareddata"
+            / "xcschemes"
+            / "SimDriver.xcscheme"
+        ).read_text()
+        self.assertEqual(
+            set(re.findall(r'BlueprintIdentifier = "(\w+)"', scheme)), {target}
+        )
 
     def test_python_uses_only_commands_the_swift_driver_serves(self):
         swift = (DRIVER / "SimDriverUITests" / "SimDriverServer.swift").read_text()
@@ -36,11 +48,13 @@ class DriverProjectTest(unittest.TestCase):
     def test_test_name_matches_run_script(self):
         script = (DRIVER / "run-driver.sh").read_text()
         swift = (DRIVER / "SimDriverUITests" / "SimDriverServer.swift").read_text()
-        cls, method = re.search(r"-only-testing:SimDriverUITests/(\w+)/(\w+)", script).groups()
-        self.assertIn("class %s: XCTestCase" % cls, swift)
-        self.assertIn("func %s()" % method, swift)
+        cls, method = must_search(
+            r"-only-testing:SimDriverUITests/(\w+)/(\w+)", script
+        ).groups()
+        self.assertIn(f"class {cls}: XCTestCase", swift)
+        self.assertIn(f"func {method}()", swift)
         for env in re.findall(r"TEST_RUNNER_(\w+)=", script):
-            self.assertIn('env["%s"]' % env, swift)
+            self.assertIn(f'env["{env}"]', swift)
 
 
 if __name__ == "__main__":

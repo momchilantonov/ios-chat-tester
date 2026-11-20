@@ -9,7 +9,7 @@ Follow ios-chat-tester/docs/ADAPT-PRIVATE-COPY.md for the folder <new folder>
 ```
 
 The result: the tool's files, a README for users of your private repo (how to install and use the agents; no
-development history), without `CHANGELOG.md` and `GUIDE_FOR_AGENTS.md`. Nothing is committed.
+development history). Nothing is committed.
 
 ---
 
@@ -44,10 +44,8 @@ sed "s|{{REPO_URL}}|$NEW_URL|g; s|{{REPO_NAME}}|$NEW_NAME|g" \
     ios-chat-tester/docs/private-copy/README.template.md > "$T/README.md"
 ```
 
-## 4. Remove what belongs to the public project's development
+## 4. The profile example
 ```bash
-rm "$T/GUIDE_FOR_AGENTS.md" "$T/CHANGELOG.md"
-grep -v -e '^REPORT-FOR-MAINTAINER.md$' -e '^TEST_AGENT_REQUIREMENTS.md$' "$T/.gitignore" > "$T/.gitignore.new" && mv "$T/.gitignore.new" "$T/.gitignore"
 perl -pi -e 's/here - it stays in your repository, it is not part of the public chat-tester project\./here - it stays on this machine (git-ignored) and is never committed to this repository./' "$T/tester/profile.example.md"
 ```
 
@@ -56,7 +54,7 @@ perl -pi -e 's/here - it stays in your repository, it is not part of the public 
 grep -rn -i "momchil\|ios-chat-tester\|GUIDE_FOR_AGENTS\|CHANGELOG\|REPORT-FOR-MAINTAINER\|TEST_AGENT_REQUIREMENTS\|{{REPO_URL}}\|{{REPO_NAME}}" "$T" --exclude-dir=.git   # must print nothing
 grep -n -i "public" "$T/README.md" "$T/tester/profile.example.md"                                                      # must print nothing
 grep -c "$NEW_URL" "$T/README.md"                                         # must print 5
-find "$T" -path "$T/.git" -prune -o -type f -print | wc -l                # must print 43
+find "$T" -path "$T/.git" -prune -o -type f -print | wc -l                # must print 44
 git -C "$T" rev-list --all --count                                        # must print 0
 ```
 `grep` ends with exit code 1 when it finds nothing - that is the expected result here.

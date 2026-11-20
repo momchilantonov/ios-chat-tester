@@ -11,25 +11,29 @@
   python3 simchat_server.py demo "Hello"        -> start driver, show screen, send, wait, print the reply
 Values are parsed as JSON when possible (numbers, true/false, {...}), otherwise taken as text.
 """
+
+import io
 import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-if sys.version_info < (3, 9):
-    sys.exit("simchat needs Python 3.9+ (macOS: /usr/bin/python3 from the Xcode command line tools)")
+if sys.version_info < (3, 11):  # noqa: UP036 - a clear message instead of a crash on an old python3
+    sys.exit(
+        "simchat needs Python 3.11+ - re-run install.py with it (python3.11 install.py ...)"
+    )
 
-from simchat.config import load_config  # noqa: E402
-from simchat.mcp import TOOL_NAMES, Server, call_tool  # noqa: E402
-from simchat.tester import Tester, ToolError  # noqa: E402
+from simchat.config import load_config
+from simchat.mcp import TOOL_NAMES, Server, call_tool
+from simchat.tester import Tester, ToolError
 
 
 def _parse(pairs):
     args = {}
     for pair in pairs:
         if "=" not in pair:
-            sys.exit("arguments must look like key=value, got %r" % pair)
+            sys.exit(f"arguments must look like key=value, got {pair!r}")
         key, value = pair.split("=", 1)
         try:
             args[key] = json.loads(value)
@@ -49,9 +53,14 @@ def _cli(argv):
     tester = Tester(load_config())
     if argv[0] == "demo":
         text = argv[1] if len(argv) > 1 else "Hello"
-        for name, args in (("start_driver", {"wait_s": 110}), ("open_app", {}), ("screen", {}),
-                           ("send_message", {"text": text}), ("wait_for_reply", {})):
-            print("== %s %s" % (name, json.dumps(args, ensure_ascii=False)))
+        for name, args in (
+            ("start_driver", {"wait_s": 110}),
+            ("open_app", {}),
+            ("screen", {}),
+            ("send_message", {"text": text}),
+            ("wait_for_reply", {}),
+        ):
+            print(f"== {name} {json.dumps(args, ensure_ascii=False)}")
             try:
                 _print(call_tool(tester, name, args))
             except ToolError as exc:
@@ -59,7 +68,11 @@ def _cli(argv):
                 return 1
         return 0
     if argv[0] not in TOOL_NAMES:
-        sys.exit("unknown tool %r. Tools: %s" % (argv[0], ", ".join(sorted(TOOL_NAMES))))
+        sys.exit(
+            "unknown tool {!r}. Tools: {}".format(
+                argv[0], ", ".join(sorted(TOOL_NAMES))
+            )
+        )
     try:
         _print(call_tool(tester, argv[0], _parse(argv[1:])))
         return 0
@@ -74,11 +87,9 @@ def main():
             print(__doc__)
             return 0
         return _cli(sys.argv[1:])
-    try:
-        sys.stdin.reconfigure(encoding="utf-8")
-        sys.stdout.reconfigure(encoding="utf-8")
-    except AttributeError:
-        pass
+    for stream in (sys.stdin, sys.stdout):
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(encoding="utf-8")
     Server(lambda: Tester(load_config()), sys.stdout).serve(sys.stdin)
     return 0
 

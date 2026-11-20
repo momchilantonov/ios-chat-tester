@@ -4,6 +4,7 @@ from pathlib import Path
 
 from helpers import ROOT, Stack
 from simchat.plan import fill_results, format_result, parse_plan
+from simchat.tester import ToolError
 
 PLAN = """# Test plan: cards
 Preconditions: test customer with 2 cards
@@ -29,14 +30,19 @@ class PlanFormatTest(unittest.TestCase):
     def test_parse(self):
         p = parse_plan(PLAN)
         self.assertEqual(p["title"], "Test plan: cards")
-        self.assertEqual(p["sections"], ["Conversation 1: block a card", "Conversation 2: unknown"])
+        self.assertEqual(
+            p["sections"], ["Conversation 1: block a card", "Conversation 2: unknown"]
+        )
         self.assertEqual([r["row"] for r in p["rows"]], [1, 2, 3, 4])
         self.assertEqual(p["rows"][1]["prompt"], "tap Cards")
-        self.assertEqual(p["rows"][3]["flow"], "fallback")      # extra "#" column is tolerated
+        # extra "#" column is tolerated
+        self.assertEqual(p["rows"][3]["flow"], "fallback")
         self.assertEqual(p["rows"][3]["prompt"], "asdf")
 
     def test_fill_keeps_everything_else(self):
-        filled = fill_results(PLAN, {1: "success", 4: format_result("fail", "got | an error")})
+        filled = fill_results(
+            PLAN, {1: "success", 4: format_result("fail", "got | an error")}
+        )
         self.assertIn("| fl_cards | Hello |", filled)
         self.assertTrue(filled.splitlines()[7].endswith("| success |"))
         self.assertIn("fail: got \\| an error", filled)
@@ -46,8 +52,12 @@ class PlanFormatTest(unittest.TestCase):
         self.assertEqual(again["rows"][1]["result"], "")
 
     def test_result_format(self):
-        self.assertEqual(format_result("SUCCESS", "evidence is kept in the report"), "success")
-        self.assertEqual(format_result("blocked", "mock data missing"), "blocked: mock data missing")
+        self.assertEqual(
+            format_result("SUCCESS", "evidence is kept in the report"), "success"
+        )
+        self.assertEqual(
+            format_result("blocked", "mock data missing"), "blocked: mock data missing"
+        )
         for bad in (("fail", ""), ("blocked", " "), ("maybe", "x")):
             with self.assertRaises(ValueError):
                 format_result(*bad)
@@ -76,29 +86,44 @@ class PlanRunTest(unittest.TestCase):
         self.t.open_app(fresh=True)
         self.t.wait_for_reply()
         self.t.send_message("Hello")
-        self.assertEqual(self.t.wait_for_reply()["new_messages"], ["Hi! I can help with cards and payments."])
+        self.assertEqual(
+            self.t.wait_for_reply()["new_messages"],
+            ["Hi! I can help with cards and payments."],
+        )
         self.t.record_result(1, "success")
         self.t.tap(text="Cards")
         self.t.wait_for_reply()
         self.t.record_result(2, "success")
         self.t.tap(text="Debit")
         self.t.wait_for_reply()
-        res = self.t.record_result(3, "fail", 'got "Your debit card is blocked." but expected a confirmation first')
+        res = self.t.record_result(
+            3,
+            "fail",
+            'got "Your debit card is blocked." but expected a confirmation first',
+        )
         self.assertEqual(res["rows_left"], [4])
-        with self.assertRaises(Exception):
+        with self.assertRaises(ToolError):
             self.t.record_result(7, "success")
-        with self.assertRaises(Exception):
-            self.t.record_result(4, "blocked")              # blocked needs a reason
+        with self.assertRaises(ToolError):
+            self.t.record_result(4, "blocked")  # blocked needs a reason
         end = self.t.end_run("Row 3 failed, row 4 not run.")
         self.assertEqual(end["verdict"], "FAIL")
-        self.assertEqual(end["counts"], {"success": 2, "fail": 1, "blocked": 0, "not_run": 1})
+        self.assertEqual(
+            end["counts"], {"success": 2, "fail": 1, "blocked": 0, "not_run": 1}
+        )
         self.assertEqual(end["not_run"], [4])
         results = parse_plan(Path(end["results"]).read_text(encoding="utf-8"))
-        self.assertEqual([r["result"] for r in results["rows"]],
-                         ["success", "success",
-                          'fail: got "Your debit card is blocked." but expected a confirmation first',
-                          "blocked: not run"])
-        self.assertNotIn("results_beside_plan", end)          # plan outside tester/plans: only in the run folder
+        self.assertEqual(
+            [r["result"] for r in results["rows"]],
+            [
+                "success",
+                "success",
+                'fail: got "Your debit card is blocked." but expected a confirmation first',
+                "blocked: not run",
+            ],
+        )
+        # plan outside tester/plans: only in the run folder
+        self.assertNotIn("results_beside_plan", end)
 
     def test_verdicts(self):
         self.t.start_run(plan=str(self.plan))
@@ -117,12 +142,12 @@ class PlanRunTest(unittest.TestCase):
     def test_plan_without_table_and_record_without_plan(self):
         bad = Path(self.tmp.name) / "bad.md"
         bad.write_text("# nothing here\n", encoding="utf-8")
-        with self.assertRaises(Exception):
+        with self.assertRaises(ToolError):
             self.t.start_run(plan=str(bad))
         self.t.start_run("free")
-        with self.assertRaises(Exception):
+        with self.assertRaises(ToolError):
             self.t.record_result(1, "success")
-        with self.assertRaises(Exception):
+        with self.assertRaises(ToolError):
             self.t.end_run("no verdict given")
 
     def test_plans_tool_lists_and_reads(self):

@@ -7,7 +7,7 @@
         --app-repo ~/path/to/ios-app-repo --bot-repo ~/path/to/bot-repo      (no questions)
 
 What it does:
-  1. checks prerequisites (Python 3.9+, Xcode, simctl, Copilot CLI)
+  1. checks prerequisites (Python 3.11+, Xcode, simctl, Copilot CLI)
   2. creates tester/config.json and tester/profile.md from the examples (once; flags update config.json)
   3. installs the tester agent, the planner agent (<name>-planner) and their skills for Copilot CLI (~/.copilot/agents, ~/.copilot/skills) and registers the
      "simchat" MCP server for Copilot CLI (~/.copilot/mcp-config.json) and VS Code (user mcp.json);
@@ -20,6 +20,7 @@ Re-run it after `git pull` - files it wrote before are updated, files you edited
     python3 install.py --uninstall    stop the driver, remove it from the simulator and remove everything
                                       install.py put outside this folder (asks first). Then delete the folder.
 """
+
 import argparse
 import hashlib
 import json
@@ -30,15 +31,25 @@ import subprocess
 import sys
 from pathlib import Path
 
+if sys.version_info < (3, 11):  # noqa: UP036 - a clear message instead of a crash on an old python3
+    sys.exit(
+        f"install.py needs Python 3.11+, this is {sys.version.split()[0]}. Run it as: python3.11 install.py ..."
+    )
+
 ROOT = Path(__file__).resolve().parent
 TESTER = ROOT / "tester"
 TEMPLATES = ROOT / "templates"
 SERVER = TESTER / "simchat_server.py"
-DRIVER_STATE = TESTER / "driver" / ".build" / "driver.json"  # this clone's running driver (see simchat/driver.py)
+# this clone's running driver (see simchat/driver.py)
+DRIVER_STATE = TESTER / "driver" / ".build" / "driver.json"
 MANIFEST = TESTER / ".install.json"
 MCP_NAME = "simchat"
 SKILLS = ("chat-testing", "chat-test-report", "test-plan-format")
-AGENTS = (("agent.md", "{name}"), ("planner.md", "{name}-planner"))  # template -> agent name
+# template -> agent name
+AGENTS = (
+    ("agent.md", "{name}"),
+    ("planner.md", "{name}-planner"),
+)
 VSCODE_USER = Path("~/Library/Application Support/Code/User").expanduser()
 RUNNER_ID = "dev.simchat.SimDriverUITests.xctrunner"  # the test-runner app Xcode installs on the simulator
 
@@ -49,11 +60,20 @@ def pick_python(requested=None):
     if requested:
         return str(Path(requested).expanduser()), None
     if sys.prefix != getattr(sys, "base_prefix", sys.prefix):  # running inside a venv
-        for cand in (getattr(sys, "_base_executable", None), "/usr/bin/python3",
-                     os.path.join(sys.base_prefix, "bin", "python3")):
-            if cand and os.path.isfile(cand) and os.access(cand, os.X_OK) and \
-                    Path(cand).resolve() != Path(sys.executable).resolve():
-                return cand, "a virtualenv is active (%s) - registering %s instead" % (sys.prefix, cand)
+        for cand in (
+            getattr(sys, "_base_executable", None),
+            os.path.join(sys.base_prefix, "bin", "python3"),
+        ):
+            if (
+                cand
+                and os.path.isfile(cand)
+                and os.access(cand, os.X_OK)
+                and Path(cand).resolve() != Path(sys.executable).resolve()
+            ):
+                return (
+                    cand,
+                    f"a virtualenv is active ({sys.prefix}) - registering {cand} instead",
+                )
     return sys.executable or "python3", None
 
 
@@ -81,7 +101,9 @@ class Installer:
             self.say(text)
 
     def ask(self, question, default=""):
-        answer = self.inp("%s%s: " % (question, " [%s]" % default if default else "")).strip()
+        answer = self.inp(
+            "{}{}: ".format(question, f" [{default}]" if default else "")
+        ).strip()
         if answer.lower() == "q":
             raise Quit()
         return answer or default
@@ -90,7 +112,11 @@ class Installer:
         if self.a.yes:
             return True
         while True:
-            answer = self.inp("%s %s " % (question, "[Y/n/q]" if default else "[y/N/q]")).strip().lower()
+            answer = (
+                self.inp("{} {} ".format(question, "[Y/n/q]" if default else "[y/N/q]"))
+                .strip()
+                .lower()
+            )
             if not answer:
                 return default
             if answer in ("y", "yes"):
@@ -117,17 +143,19 @@ class Installer:
         if path.exists():
             current = path.read_text(encoding="utf-8", errors="replace")
             if current == content:
-                self.say("  same     %s" % path)
+                self.say(f"  same     {path}")
                 self.manifest["files"][key] = self._sha(content)
                 return
             ours = self.old["files"].get(key) == self._sha(current)
             if not ours and not self.a.force:
-                self.say("  KEPT     %s (not written by install.py or edited since; --force overwrites)" % path)
-                self.problems.append("kept %s" % path)
+                self.say(
+                    f"  KEPT     {path} (not written by install.py or edited since; --force overwrites)"
+                )
+                self.problems.append(f"kept {path}")
                 return
-            self.say("  update   %s" % path)
+            self.say(f"  update   {path}")
         else:
-            self.say("  create   %s" % path)
+            self.say(f"  create   {path}")
         if not self.dry:
             self.manifest["files"][key] = self._sha(content)
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -142,22 +170,31 @@ class Installer:
             try:
                 data = json.loads(path.read_text(encoding="utf-8") or "{}")
             except ValueError:
-                self.say("  MANUAL   %s is not plain JSON (comments?). Add under \"%s\":\n%s"
-                         % (path, key, json.dumps({MCP_NAME: entry}, indent=2)))
-                self.problems.append("manual edit needed: %s" % path)
+                self.say(
+                    f'  MANUAL   {path} is not plain JSON (comments?). Add under "{key}":\n{json.dumps({MCP_NAME: entry}, indent=2)}'
+                )
+                self.problems.append(f"manual edit needed: {path}")
                 return
         servers = data.setdefault(key, {})
         if servers.get(MCP_NAME) == entry:
-            self.say("  same     %s (%s.%s)" % (path, key, MCP_NAME))
+            self.say(f"  same     {path} ({key}.{MCP_NAME})")
             self.manifest["json"].append({"path": str(path), "key": key})
             return
-        if not self.dry:   # "created": uninstall may delete the file again once our entry was its only content
-            self.manifest["json"].append({"path": str(path), "key": key, "created": not path.exists()})
-        self.say("  %s %s (%s.%s)" % ("merge   " if path.exists() else "create  ", path, key, MCP_NAME))
+        if not self.dry:  # "created": uninstall may delete the file again once our entry was its only content
+            self.manifest["json"].append(
+                {"path": str(path), "key": key, "created": not path.exists()}
+            )
+        self.say(
+            "  {} {} ({}.{})".format(
+                "merge   " if path.exists() else "create  ", path, key, MCP_NAME
+            )
+        )
         servers[MCP_NAME] = entry
         if not self.dry:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            path.write_text(
+                json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+            )
 
     @staticmethod
     def _is_mac():
@@ -169,7 +206,9 @@ class Installer:
 
     def run(self, cmd, timeout=30):
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            res = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=timeout, check=False
+            )
             return res.returncode, (res.stdout or res.stderr).strip()
         except (OSError, subprocess.SubprocessError) as exc:
             return 127, str(exc)
@@ -177,28 +216,42 @@ class Installer:
     # ------------------------------------------------------------------ steps
     def prerequisites(self):
         self.header("[1/4] prerequisites")
-        ok = sys.version_info >= (3, 9)
-        self.say("  %s python %s (%s)" % ("ok  " if ok else "FAIL", platform.python_version(), sys.executable))
+        ok = sys.version_info >= (3, 11)
+        self.say(
+            "  {} python {} ({})".format(
+                "ok  " if ok else "FAIL", platform.python_version(), sys.executable
+            )
+        )
         if not ok:
-            self.problems.append("Python 3.9+ required")
+            self.problems.append("Python 3.11+ required")
         if self.python_note:
-            self.say("  note %s" % self.python_note)
+            self.say(f"  note {self.python_note}")
         self.mac = platform.system() == "Darwin"
         if not self.mac:
-            self.say("  warn not macOS - files are generated, the driver build is skipped")
+            self.say(
+                "  warn not macOS - files are generated, the driver build is skipped"
+            )
             return
-        for label, cmd, required in (("xcode", ["xcodebuild", "-version"], True),
-                                     ("simctl", ["xcrun", "simctl", "help"], True),
-                                     ("copilot", ["copilot", "--version"], False)):
+        for label, cmd, required in (
+            ("xcode", ["xcodebuild", "-version"], True),
+            ("simctl", ["xcrun", "simctl", "help"], True),
+            ("copilot", ["copilot", "--version"], False),
+        ):
             code, text = self.run(cmd)
             first = text.splitlines()[0] if text else ""
             if code == 0:
-                self.say("  ok   %s %s" % (label, first))
+                self.say(f"  ok   {label} {first}")
             else:
-                self.say("  %s %s not found (%s)" % ("FAIL" if required else "warn", label, first[:120]))
+                self.say(
+                    "  {} {} not found ({})".format(
+                        "FAIL" if required else "warn", label, first[:120]
+                    )
+                )
                 if required:
-                    self.problems.append("%s missing - install Xcode and run: sudo xcode-select -s "
-                                         "/Applications/Xcode.app" % label)
+                    self.problems.append(
+                        f"{label} missing - install Xcode and run: sudo xcode-select -s "
+                        "/Applications/Xcode.app"
+                    )
 
     def local_config(self):
         self.header("[2/4] local config (stays on this machine, git-ignored)")
@@ -207,13 +260,15 @@ class Installer:
             try:
                 cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
             except ValueError as exc:
-                self.problems.append("%s is not valid JSON: %s" % (cfg_path, exc))
-                self.say("  FAIL %s is not valid JSON" % cfg_path)
+                self.problems.append(f"{cfg_path} is not valid JSON: {exc}")
+                self.say(f"  FAIL {cfg_path} is not valid JSON")
                 self.cfg = {}
                 return
             changed = False
         else:
-            cfg = json.loads((TESTER / "config.example.json").read_text(encoding="utf-8"))
+            cfg = json.loads(
+                (TESTER / "config.example.json").read_text(encoding="utf-8")
+            )
             changed = True
         if self.a.bundle_id:
             cfg.setdefault("app", {})["bundle_id"] = self.a.bundle_id
@@ -226,21 +281,33 @@ class Installer:
         self.cfg = cfg
         for role, path in repos.items():
             if not Path(path).is_dir():
-                self.say("  warn repo %s: %s does not exist" % (role, path))
+                self.say(f"  warn repo {role}: {path} does not exist")
         if changed or not cfg_path.exists():
-            self.say("  %s %s" % ("update  " if cfg_path.exists() else "create  ", cfg_path))
+            self.say(
+                "  {} {}".format(
+                    "update  " if cfg_path.exists() else "create  ", cfg_path
+                )
+            )
             if not self.dry:
-                cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+                cfg_path.write_text(
+                    json.dumps(cfg, indent=2, ensure_ascii=False) + "\n",
+                    encoding="utf-8",
+                )
         else:
-            self.say("  same     %s" % cfg_path)
+            self.say(f"  same     {cfg_path}")
         if not prof_path.exists():
-            self.say("  create   %s - fill in the TODOs" % prof_path)
+            self.say(f"  create   {prof_path} - fill in the TODOs")
             if not self.dry:
                 shutil.copy2(TESTER / "profile.example.md", prof_path)
         else:
-            self.say("  same     %s" % prof_path)
-        if not cfg.get("app", {}).get("bundle_id") or cfg["app"]["bundle_id"] == "com.example.ChatDemo":
-            self.problems.append("set the app bundle id: --bundle-id or app.bundle_id in %s" % cfg_path)
+            self.say(f"  same     {prof_path}")
+        if (
+            not cfg.get("app", {}).get("bundle_id")
+            or cfg["app"]["bundle_id"] == "com.example.ChatDemo"
+        ):
+            self.problems.append(
+                f"set the app bundle id: --bundle-id or app.bundle_id in {cfg_path}"
+            )
 
     def repo_flags(self):
         out = []
@@ -255,39 +322,66 @@ class Installer:
 
     def render(self, text):
         repos = (getattr(self, "cfg", {}) or {}).get("repos") or {}
-        lines = ["- %s: `%s`" % (role, path) for role, path in repos.items()]
-        lines.append("- tester (plans, runs, profile): `%s`" % TESTER)
-        return (text.replace("{{AGENT_NAME}}", self.a.name)
-                    .replace("{{PLANNER_NAME}}", self.a.name + "-planner")
-                    .replace("{{TESTER_DIR}}", str(TESTER))
-                    .replace("{{REPOS}}", "\n".join(lines)))
+        lines = [f"- {role}: `{path}`" for role, path in repos.items()]
+        lines.append(f"- tester (plans, runs, profile): `{TESTER}`")
+        return (
+            text.replace("{{AGENT_NAME}}", self.a.name)
+            .replace("{{PLANNER_NAME}}", self.a.name + "-planner")
+            .replace("{{TESTER_DIR}}", str(TESTER))
+            .replace("{{REPOS}}", "\n".join(lines))
+        )
 
     def agent_files(self):
         python = self.python
-        cli_entry = {"type": "local", "command": python, "args": [str(SERVER)], "env": {}, "tools": ["*"]}
+        cli_entry = {
+            "type": "local",
+            "command": python,
+            "args": [str(SERVER)],
+            "env": {},
+            "tools": ["*"],
+        }
         code_entry = {"type": "stdio", "command": python, "args": [str(SERVER)]}
-        agents = [(tpl_name.format(name=self.a.name), self.render((TEMPLATES / tpl).read_text(encoding="utf-8")))
-                  for tpl, tpl_name in AGENTS]
+        agents = [
+            (
+                tpl_name.format(name=self.a.name),
+                self.render((TEMPLATES / tpl).read_text(encoding="utf-8")),
+            )
+            for tpl, tpl_name in AGENTS
+        ]
         if self.a.into:
             repo = Path(self.a.into).expanduser().resolve()
-            self.header("[3/4] agent, skills and MCP registration into %s" % repo)
+            self.header(f"[3/4] agent, skills and MCP registration into {repo}")
             base = repo / ".github"
             for agent_name, agent in agents:
-                self.write(base / "agents" / ("%s.agent.md" % agent_name), agent)
+                self.write(base / "agents" / (f"{agent_name}.agent.md"), agent)
             for skill in SKILLS:
-                self.write(base / "skills" / skill / "SKILL.md",
-                           self.render((TEMPLATES / "skills" / skill / "SKILL.md").read_text(encoding="utf-8")))
+                self.write(
+                    base / "skills" / skill / "SKILL.md",
+                    self.render(
+                        (TEMPLATES / "skills" / skill / "SKILL.md").read_text(
+                            encoding="utf-8"
+                        )
+                    ),
+                )
             self.merge_json(base / "mcp.json", "mcpServers", cli_entry)
             if not self.a.no_vscode:
                 self.merge_json(repo / ".vscode" / "mcp.json", "servers", code_entry)
         else:
             home = Path(self.a.copilot_home).expanduser()
-            self.header("[3/4] agent, skills and MCP registration (user level: %s)" % home)
+            self.header(
+                f"[3/4] agent, skills and MCP registration (user level: {home})"
+            )
             for agent_name, agent in agents:
-                self.write(home / "agents" / ("%s.agent.md" % agent_name), agent)
+                self.write(home / "agents" / (f"{agent_name}.agent.md"), agent)
             for skill in SKILLS:
-                self.write(home / "skills" / skill / "SKILL.md",
-                           self.render((TEMPLATES / "skills" / skill / "SKILL.md").read_text(encoding="utf-8")))
+                self.write(
+                    home / "skills" / skill / "SKILL.md",
+                    self.render(
+                        (TEMPLATES / "skills" / skill / "SKILL.md").read_text(
+                            encoding="utf-8"
+                        )
+                    ),
+                )
             self.merge_json(home / "mcp-config.json", "mcpServers", cli_entry)
             vscode = Path(self.a.vscode_dir).expanduser()
             if self.a.no_vscode:
@@ -295,80 +389,115 @@ class Installer:
             elif vscode.is_dir():
                 self.merge_json(vscode / "mcp.json", "servers", code_entry)
             else:
-                self.say("  skip     VS Code user folder %s not found (use --vscode-dir)" % vscode)
+                self.say(
+                    f"  skip     VS Code user folder {vscode} not found (use --vscode-dir)"
+                )
         self._check_shadowing([name for name, _ in agents])
         repos = [p for _, p in sorted((self.cfg.get("repos") or {}).items())]
         dirs = [str(TESTER)] + repos
         for target, link in _symlink_targets(repos):
             # e.g. a repo's .github/docs linking to a docs checkout elsewhere: Copilot only reads allowed folders
-            self.say("  add-dir  %s (symlink %s)" % (target, link))
+            self.say(f"  add-dir  {target} (symlink {link})")
             dirs.append(target)
-        add = " ".join("--add-dir=%s" % _sh(d) for d in dirs)
+        add = " ".join(f"--add-dir={_sh(d)}" for d in dirs)
         # The simchat tools only drive the Simulator, read local endpoints/logs and write under runs/ and plans/,
         # so they are pre-approved: a plan can run without a confirmation prompt for every tap.
-        allow = "" if self.a.ask_approval else " --allow-tool %s" % MCP_NAME
+        allow = "" if self.a.ask_approval else f" --allow-tool {MCP_NAME}"
         # The launcher brings its own MCP config: Copilot skips the workspace/user config in some folders (e.g. an
         # untrusted folder with -p), and the agent then wrongly says the simchat tools are not available.
         mcp_file = TESTER / "bin" / "mcp-config.json"
-        self.write(mcp_file, json.dumps({"mcpServers": {MCP_NAME: cli_entry}}, indent=2) + "\n")
-        mcp = " --additional-mcp-config=@%s" % _sh(str(mcp_file))
+        self.write(
+            mcp_file, json.dumps({"mcpServers": {MCP_NAME: cli_entry}}, indent=2) + "\n"
+        )
+        mcp = f" --additional-mcp-config=@{_sh(str(mcp_file))}"
         for agent_name, _ in agents:
-            launcher = ("#!/bin/bash\n# Start the %s agent in Copilot CLI with read access to the tester and repos%s.\n"
-                        "# Run it from the folder you want as the working directory (e.g. the bot repo).\n"
-                        "for a in \"$@\"; do case \"$a\" in -p|--prompt|--prompt=*)\n"
-                        "  echo \"note: non-interactive run (-p) - if MCP tools need interactive approval here (organisation \"\\\n"
-                        "\"policy), every simchat call is denied%s: run without -p.\" >&2;; esac; done\n"
-                        "exec copilot --agent=%s%s%s %s \"$@\"\n"
-                        % (agent_name, "" if self.a.ask_approval else ", simchat tools pre-approved",
-                           " and the planner prints the plan but cannot save it" if agent_name.endswith("-planner") else "",
-                           agent_name, allow, mcp, add))
+            launcher = (
+                "#!/bin/bash\n# Start the {} agent in Copilot CLI with read access to the tester and repos{}.\n"
+                "# Run it from the folder you want as the working directory (e.g. the bot repo).\n"
+                'for a in "$@"; do case "$a" in -p|--prompt|--prompt=*)\n'
+                '  echo "note: non-interactive run (-p) - if MCP tools need interactive approval here (organisation "\\\n'
+                '"policy), every simchat call is denied{}: run without -p." >&2;; esac; done\n'
+                'exec copilot --agent={}{}{} {} "$@"\n'.format(
+                    agent_name,
+                    "" if self.a.ask_approval else ", simchat tools pre-approved",
+                    " and the planner prints the plan but cannot save it"
+                    if agent_name.endswith("-planner")
+                    else "",
+                    agent_name,
+                    allow,
+                    mcp,
+                    add,
+                )
+            )
             self.write(TESTER / "bin" / agent_name, launcher, mode=0o755)
 
     def _check_shadowing(self, names):
         """A repo-level .github/agents/<name>.agent.md with the same name overrides the installed agent there."""
-        repos = [Path(p) for p in (getattr(self, "cfg", {}) or {}).get("repos", {}).values()]
-        for parent in ROOT.parents:  # the clone may live inside another repo (e.g. its .github folder)
+        repos = [
+            Path(p) for p in (getattr(self, "cfg", {}) or {}).get("repos", {}).values()
+        ]
+        # the clone may live inside another repo (e.g. its .github folder)
+        for parent in ROOT.parents:
             if (parent / ".git").exists():
                 repos.append(parent)
                 break
         targets = {Path(self.a.into).expanduser().resolve()} if self.a.into else set()
-        base = (next(iter(targets)) / ".github") if targets else Path(self.a.copilot_home).expanduser()
-        own = {(base / "agents" / ("%s.agent.md" % name)).resolve() for name in names}
+        base = (
+            (next(iter(targets)) / ".github")
+            if targets
+            else Path(self.a.copilot_home).expanduser()
+        )
+        own = {(base / "agents" / (f"{name}.agent.md")).resolve() for name in names}
         for repo in dict.fromkeys(p.expanduser().resolve() for p in repos):
             if repo in targets:
                 continue
             for name in names:
-                f = repo / ".github" / "agents" / ("%s.agent.md" % name)
-                if f.exists() and f.resolve() in own:   # our own file, seen through a symlink (e.g. a submodule)
+                f = repo / ".github" / "agents" / (f"{name}.agent.md")
+                # our own file, seen through a symlink (e.g. a submodule)
+                if f.exists() and f.resolve() in own:
                     continue
                 if f.exists():
                     empty = f.stat().st_size == 0
-                    self.say("  WARN     %s exists%s - in that repo it can take precedence over the installed agent. "
-                             "Remove or rename it, or install with another --name." % (f, " (empty)" if empty else ""))
-                    self.problems.append("same-named agent in %s" % f)
+                    self.say(
+                        "  WARN     {} exists{} - in that repo it can take precedence over the installed agent. "
+                        "Remove or rename it, or install with another --name.".format(
+                            f, " (empty)" if empty else ""
+                        )
+                    )
+                    self.problems.append(f"same-named agent in {f}")
 
     def build_driver(self):
         self.header("[4/4] UI driver build")
         if self.a.skip_build or not getattr(self, "mac", False):
-            self.say("  skip     (%s)" % ("--skip-build" if self.a.skip_build else "not macOS"))
+            self.say(
+                "  skip     (%s)"
+                % ("--skip-build" if self.a.skip_build else "not macOS")
+            )
             return
         if self.dry:
             self.say("  would run tester/driver/run-driver.sh --build-only")
             return
         log = TESTER / "driver" / ".build" / "install-build.log"
         log.parent.mkdir(parents=True, exist_ok=True)
-        self.say("  building (1-3 min the first time) - log: %s" % log)
+        self.say(f"  building (1-3 min the first time) - log: {log}")
         with open(log, "w", encoding="utf-8") as fh:
-            code = subprocess.call(["bash", str(TESTER / "driver" / "run-driver.sh"), "--build-only"],
-                                   stdout=fh, stderr=subprocess.STDOUT)
+            code = subprocess.call(
+                ["bash", str(TESTER / "driver" / "run-driver.sh"), "--build-only"],
+                stdout=fh,
+                stderr=subprocess.STDOUT,
+            )
         if code == 0:
             self.say("  ok       driver built")
             self._restart_hint()
         else:
             tail = log.read_text(encoding="utf-8", errors="replace").splitlines()
             errors = [ln for ln in tail if "error:" in ln][-8:] or tail[-8:]
-            self.say("  FAIL     xcodebuild exited %d:\n    %s" % (code, "\n    ".join(errors)))
-            self.problems.append("driver build failed - see %s" % log)
+            self.say(
+                "  FAIL     xcodebuild exited {}:\n    {}".format(
+                    code, "\n    ".join(errors)
+                )
+            )
+            self.problems.append(f"driver build failed - see {log}")
 
     def save_manifest(self):
         if not self.a.dry_run and (self.manifest["files"] or self.manifest["json"]):
@@ -378,9 +507,20 @@ class Installer:
             for j in self.old.get("json", []) + self.manifest["json"]:
                 k = (j["path"], j["key"])
                 jsons[k] = jsons.get(k, False) or bool(j.get("created"))
-            MANIFEST.write_text(json.dumps({"files": merged, "json": [
-                {"path": p, "key": k, "created": c} for (p, k), c in sorted(jsons.items())]},
-                indent=2) + "\n", encoding="utf-8")
+            MANIFEST.write_text(
+                json.dumps(
+                    {
+                        "files": merged,
+                        "json": [
+                            {"path": p, "key": k, "created": c}
+                            for (p, k), c in sorted(jsons.items())
+                        ],
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
 
     def install(self):
         self.prerequisites()
@@ -405,11 +545,11 @@ class Installer:
             path = Path(answer).expanduser()
             if path.is_dir():
                 return str(path.resolve())
-            self.say("  %s is not a folder - try again" % path)
+            self.say(f"  {path} is not a folder - try again")
 
     def _step(self, number, title, explain, fn, ask=True):
         self.say("")
-        self.say("== Step %d of 4: %s" % (number, title))
+        self.say(f"== Step {number} of 4: {title}")
         for line in explain:
             self.say("   " + line)
         if not ask:
@@ -418,7 +558,7 @@ class Installer:
         self.say("   Preview:")
         self.dry = True
         fn()
-        if self.confirm("   Do step %d?" % number):
+        if self.confirm(f"   Do step {number}?"):
             self.dry = False
             self.say("   Result:")
             fn()
@@ -428,41 +568,92 @@ class Installer:
     def guided_install(self):
         self.guided = True
         cfg = self._existing_config()
-        self.say("Guided setup of the live chat tester. 4 steps; nothing changes before you confirm a step.")
+        self.say(
+            "Guided setup of the live chat tester. 4 steps; nothing changes before you confirm a step."
+        )
         self.say("Answer with Enter to accept [the default], q to quit at any time.")
         self.say("")
-        self.a.name = self.ask("Agent name (letters, digits, - and _)", cfg.get("agent_name") or self.a.name)
+        self.a.name = self.ask(
+            "Agent name (letters, digits, - and _)",
+            cfg.get("agent_name") or self.a.name,
+        )
         while not all(c.isalnum() or c in "-_" for c in self.a.name):
-            self.a.name = self.ask("Only letters, digits, - and _ please", "chat-tester")
-        self.say("  The bundle id is in Xcode: app target > General > Bundle Identifier.")
+            self.a.name = self.ask(
+                "Only letters, digits, - and _ please", "chat-tester"
+            )
+        self.say(
+            "  The bundle id is in Xcode: app target > General > Bundle Identifier."
+        )
         bundle = (cfg.get("app") or {}).get("bundle_id", "")
-        self.a.bundle_id = self.ask("Bundle id of the app under test",
-                                    "" if bundle == "com.example.ChatDemo" else bundle) or None
+        self.a.bundle_id = (
+            self.ask(
+                "Bundle id of the app under test",
+                "" if bundle == "com.example.ChatDemo" else bundle,
+            )
+            or None
+        )
         repos = cfg.get("repos") or {}
-        self.a.app_repo = self._ask_dir("Folder of the iOS app repo (the agent may read it)", repos.get("app", ""))
-        self.a.bot_repo = self._ask_dir("Folder of the bot/backend repo (the agent may read it)", repos.get("bot", ""))
-        where = self.ask("Install the agent for your user - works in every folder (1) - or into one repo's "
-                         ".github/.vscode (2)?", "1")
+        self.a.app_repo = self._ask_dir(
+            "Folder of the iOS app repo (the agent may read it)", repos.get("app", "")
+        )
+        self.a.bot_repo = self._ask_dir(
+            "Folder of the bot/backend repo (the agent may read it)",
+            repos.get("bot", ""),
+        )
+        where = self.ask(
+            "Install the agent for your user - works in every folder (1) - or into one repo's "
+            ".github/.vscode (2)?",
+            "1",
+        )
         if where == "2":
             self.a.into = self._ask_dir("Repo to install into", self.a.bot_repo or "")
-        self._step(1, "check prerequisites", ["Python 3.9+, Xcode, simctl, Copilot CLI. Changes nothing."],
-                   self.prerequisites, ask=False)
-        if self.problems and not self.confirm("   Some prerequisites are missing. Continue anyway?", default=False):
+        self._step(
+            1,
+            "check prerequisites",
+            ["Python 3.11+, Xcode, simctl, Copilot CLI. Changes nothing."],
+            self.prerequisites,
+            ask=False,
+        )
+        if self.problems and not self.confirm(
+            "   Some prerequisites are missing. Continue anyway?", default=False
+        ):
             return self.finish()
-        self._step(2, "local settings", [
-            "Creates/updates tester/config.json (bundle id, repos) and tester/profile.md.",
-            "Both stay in this folder and are git-ignored - your project details never get pushed."],
-            self.local_config)
-        target = (Path(self.a.into) / ".github") if self.a.into else Path(self.a.copilot_home).expanduser()
-        self._step(3, "agent, skills and tool registration", [
-            "Writes the agents '%s' and '%s-planner' and %d skills into %s,"
-            % (self.a.name, self.a.name, len(SKILLS), target),
-            "registers the 'simchat' tool for Copilot CLI and VS Code (other entries are kept),",
-            "and writes the launchers tester/bin/%s and tester/bin/%s-planner" % (self.a.name, self.a.name),
-            "(they pre-approve the simchat tools, so plans run without a prompt for every tap)."], self.agent_files)
-        self._step(4, "build the UI driver", [
-            "Runs xcodebuild on tester/driver (1-3 minutes the first time). Offline, nothing installed globally."],
-            self.build_driver)
+        self._step(
+            2,
+            "local settings",
+            [
+                "Creates/updates tester/config.json (bundle id, repos) and tester/profile.md.",
+                "Both stay in this folder and are git-ignored - your project details never get pushed.",
+            ],
+            self.local_config,
+        )
+        target = (
+            (Path(self.a.into) / ".github")
+            if self.a.into
+            else Path(self.a.copilot_home).expanduser()
+        )
+        self._step(
+            3,
+            "agent, skills and tool registration",
+            [
+                (
+                    f"Writes the agents '{self.a.name}' and '{self.a.name}-planner' and "
+                    f"{len(SKILLS)} skills into {target},"
+                ),
+                "registers the 'simchat' tool for Copilot CLI and VS Code (other entries are kept),",
+                f"and writes the launchers tester/bin/{self.a.name} and tester/bin/{self.a.name}-planner",
+                "(they pre-approve the simchat tools, so plans run without a prompt for every tap).",
+            ],
+            self.agent_files,
+        )
+        self._step(
+            4,
+            "build the UI driver",
+            [
+                "Runs xcodebuild on tester/driver (1-3 minutes the first time). Offline, nothing installed globally."
+            ],
+            self.build_driver,
+        )
         self.save_manifest()
         return self.finish()
 
@@ -470,20 +661,20 @@ class Installer:
         self.problems = list(dict.fromkeys(self.problems))
         self.say("")
         if self.problems:
-            self.say("Finished with %d thing(s) to fix:" % len(self.problems))
+            self.say(f"Finished with {len(self.problems)} thing(s) to fix:")
             for p in self.problems:
-                self.say("  - %s" % p)
+                self.say(f"  - {p}")
         else:
             self.say("Done%s." % (" (dry run - nothing written)" if self.dry else ""))
-        self.say("Next:\n"
-                 "  1. fill in %s/profile.md and check %s/config.json\n"
-                 "  2. run your app in the simulator (Xcode), start the local stack\n"
-                 "  3. smoke test:  %s %s demo \"Hello\"\n"
-                 "  4. write a plan:  %s/bin/%s-planner   ->  \"Make a test plan for flow ...\"\n"
-                 "  5. run it:        %s/bin/%s           ->  \"Run plan ...\"\n"
-                 "     (VS Code: Copilot Chat -> agent picker -> %s-planner / %s)"
-                 % (TESTER, TESTER, _sh(self.python), SERVER, TESTER, self.a.name, TESTER, self.a.name,
-                    self.a.name, self.a.name))
+        self.say(
+            "Next:\n"
+            f"  1. fill in {TESTER}/profile.md and check {TESTER}/config.json\n"
+            "  2. run your app in the simulator (Xcode), start the local stack\n"
+            f'  3. smoke test:  {_sh(self.python)} {SERVER} demo "Hello"\n'
+            f'  4. write a plan:  {TESTER}/bin/{self.a.name}-planner   ->  "Make a test plan for flow ..."\n'
+            f'  5. run it:        {TESTER}/bin/{self.a.name}           ->  "Run plan ..."\n'
+            f"     (VS Code: Copilot Chat -> agent picker -> {self.a.name}-planner / {self.a.name})"
+        )
         return 1 if self.problems else 0
 
     def uninstall(self):
@@ -507,7 +698,9 @@ class Installer:
         so the next start_driver starts the new one."""
         if DRIVER_STATE.exists():
             self._stop_driver()
-            self.say("  stop     the running UI driver (old build) - the agent's start_driver starts the new one")
+            self.say(
+                "  stop     the running UI driver (old build) - the agent's start_driver starts the new one"
+            )
 
     def _driver_cleanup(self):
         if DRIVER_STATE.exists():
@@ -521,15 +714,20 @@ class Installer:
             from simchat.config import load_config
             from simchat.driver import DriverError, Simulator
         except ImportError as exc:
-            self.say("  skip     driver cleanup (%s)" % exc)
+            self.say(f"  skip     driver cleanup ({exc})")
             return
-        sim = Simulator(load_config(), runner=self._sim_runner)  # every command goes through self.run
+        # every command goes through self.run
+        sim = Simulator(load_config(), runner=self._sim_runner)
         try:
             booted = sim.booted()
         except DriverError:
             booted = []
         for dev in booted:
-            self.say("  remove   driver runner app %s from simulator %s (if present)" % (RUNNER_ID, dev["name"]))
+            self.say(
+                "  remove   driver runner app {} from simulator {} (if present)".format(
+                    RUNNER_ID, dev["name"]
+                )
+            )
             if not self.dry:
                 self.run(["xcrun", "simctl", "uninstall", dev["udid"], RUNNER_ID])
 
@@ -574,18 +772,21 @@ class Installer:
             p = Path(path)
             if not p.exists():
                 continue
-            if self._sha(p.read_text(encoding="utf-8", errors="replace")) != sha and not self.a.force:
-                self.say("  KEPT     %s (edited since install; --force removes)" % p)
+            if (
+                self._sha(p.read_text(encoding="utf-8", errors="replace")) != sha
+                and not self.a.force
+            ):
+                self.say(f"  KEPT     {p} (edited since install; --force removes)")
                 continue
             removed.add(p.resolve())
             if p.name == "SKILL.md":
                 removed.add(p.parent.resolve())
-        links = self._links_to(removed)            # before the targets go: realpath needs them
+        links = self._links_to(removed)  # before the targets go: realpath needs them
         for path in self.old.get("files", {}):
             p = Path(path)
             if not p.exists() or p.resolve() not in removed:
                 continue
-            self.say("  remove   %s" % p)
+            self.say(f"  remove   {p}")
             if not self.dry:
                 p.unlink()
                 for parent in (p.parent, p.parent.parent):
@@ -600,10 +801,10 @@ class Installer:
             except (OSError, ValueError):
                 continue
             if MCP_NAME in data.get(item["key"], {}):
-                self.say("  unmerge  %s (%s.%s)" % (p, item["key"], MCP_NAME))
+                self.say("  unmerge  {} ({}.{})".format(p, item["key"], MCP_NAME))
                 del data[item["key"]][MCP_NAME]
                 if item.get("created") and data == {item["key"]: {}}:
-                    self.say("  remove   %s (created by the installer, now empty)" % p)
+                    self.say(f"  remove   {p} (created by the installer, now empty)")
                     if not self.dry:
                         p.unlink()
                         try:
@@ -611,9 +812,12 @@ class Installer:
                         except OSError:
                             pass
                 elif not self.dry:
-                    p.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+                    p.write_text(
+                        json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                        encoding="utf-8",
+                    )
         for link in links:
-            self.say("  remove   link %s (pointed at a removed file)" % link)
+            self.say(f"  remove   link {link} (pointed at a removed file)")
             if not self.dry:
                 link.unlink()
                 if link.parent.parent.name == "skills":
@@ -624,14 +828,28 @@ class Installer:
         if not self.dry and MANIFEST.exists():
             MANIFEST.unlink()
         if not self.dry:
-            self.say("done. Left in place: this folder with your config.json, profile.md, plans/, runs/ and")
-            self.say("the driver build. To delete all of it:  rm -rf %s" % _sh(ROOT))
-            self.say("(simulators that were not booted may still have the runner app: "
-                     "xcrun simctl uninstall <udid> %s)" % RUNNER_ID)
+            self.say(
+                "done. Left in place: this folder with your config.json, profile.md, plans/, runs/ and"
+            )
+            self.say(f"the driver build. To delete all of it:  rm -rf {_sh(ROOT)}")
+            self.say(
+                "(simulators that were not booted may still have the runner app: "
+                f"xcrun simctl uninstall <udid> {RUNNER_ID})"
+            )
         return 0
 
 
-SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", ".build", "DerivedData", "Pods", ".tox"}
+SKIP_DIRS = {
+    ".git",
+    "node_modules",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".build",
+    "DerivedData",
+    "Pods",
+    ".tox",
+}
 
 
 def _inside(path, root):
@@ -644,7 +862,9 @@ def _inside(path, root):
 
 def _symlink_targets(repos, depth=3):
     """Folders outside the repos that symlinks in them point to (up to `depth` levels deep)."""
-    roots = [Path(r).expanduser().resolve() for r in repos if Path(r).expanduser().is_dir()]
+    roots = [
+        Path(r).expanduser().resolve() for r in repos if Path(r).expanduser().is_dir()
+    ]
     found = []
     for root in roots:
         stack = [(root, 0)]
@@ -680,27 +900,65 @@ def _sh(text):
 
 
 def parse(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--name", default="chat-tester", help="agent name (default: chat-tester)")
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument(
+        "--name", default="chat-tester", help="agent name (default: chat-tester)"
+    )
     ap.add_argument("--bundle-id", help="bundle id of the app under test")
     ap.add_argument("--app-repo", help="iOS app repository the agent may read")
     ap.add_argument("--bot-repo", help="bot/backend repository the agent may read")
-    ap.add_argument("--repo", action="append", metavar="ROLE=PATH", help="another repository the agent may read")
-    ap.add_argument("--into", metavar="REPO", help="install agent/skills/MCP into REPO/.github instead of ~/.copilot")
-    ap.add_argument("--copilot-home", default=os.environ.get("COPILOT_HOME", "~/.copilot"))
-    ap.add_argument("--vscode-dir", default=str(VSCODE_USER), help="VS Code user settings folder")
-    ap.add_argument("--no-vscode", action="store_true", help="do not register the MCP server in VS Code")
-    ap.add_argument("--skip-build", action="store_true", help="do not build the UI driver")
+    ap.add_argument(
+        "--repo",
+        action="append",
+        metavar="ROLE=PATH",
+        help="another repository the agent may read",
+    )
+    ap.add_argument(
+        "--into",
+        metavar="REPO",
+        help="install agent/skills/MCP into REPO/.github instead of ~/.copilot",
+    )
+    ap.add_argument(
+        "--copilot-home", default=os.environ.get("COPILOT_HOME", "~/.copilot")
+    )
+    ap.add_argument(
+        "--vscode-dir", default=str(VSCODE_USER), help="VS Code user settings folder"
+    )
+    ap.add_argument(
+        "--no-vscode",
+        action="store_true",
+        help="do not register the MCP server in VS Code",
+    )
+    ap.add_argument(
+        "--skip-build", action="store_true", help="do not build the UI driver"
+    )
     ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--force", action="store_true", help="overwrite/remove files even if edited by hand")
+    ap.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite/remove files even if edited by hand",
+    )
     ap.add_argument("--uninstall", action="store_true")
-    ap.add_argument("--guided", action="store_true", help="ask questions and confirm every step (default "
-                    "when run without arguments in a terminal)")
+    ap.add_argument(
+        "--guided",
+        action="store_true",
+        help="ask questions and confirm every step (default "
+        "when run without arguments in a terminal)",
+    )
     ap.add_argument("--yes", action="store_true", help="do not ask for confirmation")
-    ap.add_argument("--ask-approval", action="store_true", help="launchers do not pre-approve the simchat tools "
-                    "(Copilot asks before every tap/type)")
-    ap.add_argument("--python", help="interpreter to register for the MCP server (default: this one; "
-                    "the system Python if a virtualenv is active)")
+    ap.add_argument(
+        "--ask-approval",
+        action="store_true",
+        help="launchers do not pre-approve the simchat tools "
+        "(Copilot asks before every tap/type)",
+    )
+    ap.add_argument(
+        "--python",
+        help="interpreter to register for the MCP server (default: this one; "
+        "the virtualenv's base Python if one is active; must be 3.11+)",
+    )
     a = ap.parse_args(argv)
     if not all(c.isalnum() or c in "-_" for c in a.name):
         ap.error("--name may contain letters, digits, - and _ only")

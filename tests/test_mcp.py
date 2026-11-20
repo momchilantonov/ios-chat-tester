@@ -16,56 +16,96 @@ class McpTest(unittest.TestCase):
         self.app = FakeApp()
         self.drv = FakeDriverServer(self.app)
         self.tmp = tempfile.TemporaryDirectory()
-        cfg = {"app": {"bundle_id": "com.example.ChatDemo"},
-               "driver": {"port": self.drv.port, "manage": False, "token": self.drv.token},
-               "pace_ms": 0, "waits": {"reply_timeout_s": 3, "quiet_ms": 300, "poll_ms": 80, "send_confirm_s": 2}}
+        cfg = {
+            "app": {"bundle_id": "com.example.ChatDemo"},
+            "driver": {"port": self.drv.port, "manage": False, "token": self.drv.token},
+            "pace_ms": 0,
+            "waits": {
+                "reply_timeout_s": 3,
+                "quiet_ms": 300,
+                "poll_ms": 80,
+                "send_confirm_s": 2,
+            },
+        }
         path = Path(self.tmp.name) / "config.json"
         path.write_text(json.dumps(cfg))
         env = dict(os.environ, SIMCHAT_CONFIG=str(path))
-        self.proc = subprocess.Popen([sys.executable, str(SERVER)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=subprocess.PIPE, text=True, encoding="utf-8", env=env)
+        self.proc = subprocess.Popen(
+            [sys.executable, str(SERVER)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            env=env,
+        )
+        if not (self.proc.stdin and self.proc.stdout and self.proc.stderr):
+            raise RuntimeError("the server's pipes are missing")
+        self.stdin, self.stdout = self.proc.stdin, self.proc.stdout
+        self.stderr = self.proc.stderr
         self.n = 0
 
     def tearDown(self):
-        self.proc.stdin.close()
+        self.stdin.close()
         self.proc.wait(timeout=5)
-        self.proc.stdout.close()
-        self.proc.stderr.close()
+        self.stdout.close()
+        self.stderr.close()
         self.drv.close()
         self.tmp.cleanup()
 
-    def rpc(self, method, params=None, notify=False):
-        msg = {"jsonrpc": "2.0", "method": method}
+    def send(self, msg):
+        self.stdin.write(json.dumps(msg, ensure_ascii=False) + "\n")
+        self.stdin.flush()
+
+    def notify(self, method):
+        self.send({"jsonrpc": "2.0", "method": method})
+
+    def rpc(self, method, params=None):
+        self.n += 1
+        msg = {"jsonrpc": "2.0", "method": method, "id": self.n}
         if params is not None:
             msg["params"] = params
-        if not notify:
-            self.n += 1
-            msg["id"] = self.n
-        self.proc.stdin.write(json.dumps(msg, ensure_ascii=False) + "\n")
-        self.proc.stdin.flush()
-        if notify:
-            return None
-        return json.loads(self.proc.stdout.readline())
+        self.send(msg)
+        return json.loads(self.stdout.readline())
 
     def call(self, name, **args):
         res = self.rpc("tools/call", {"name": name, "arguments": args})["result"]
         return res["isError"], json.loads(res["content"][0]["text"])
 
     def test_handshake_tools_and_a_conversation(self):
-        init = self.rpc("initialize", {"protocolVersion": "2025-03-26", "capabilities": {},
-                                       "clientInfo": {"name": "t", "version": "1"}})
+        init = self.rpc(
+            "initialize",
+            {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "t", "version": "1"},
+            },
+        )
         self.assertEqual(init["result"]["protocolVersion"], "2025-03-26")
         self.assertEqual(init["result"]["serverInfo"]["name"], "simchat")
-        self.rpc("notifications/initialized", notify=True)
+        self.notify("notifications/initialized")
         tools = self.rpc("tools/list")["result"]["tools"]
         names = {t["name"] for t in tools}
-        self.assertTrue({"status", "send_message", "wait_for_reply", "tap", "end_run", "plans", "record_result"} <= names)
+        self.assertTrue(
+            {
+                "status",
+                "send_message",
+                "wait_for_reply",
+                "tap",
+                "end_run",
+                "plans",
+                "record_result",
+            }
+            <= names
+        )
         for t in tools:
             self.assertEqual(t["inputSchema"]["type"], "object")
         err, res = self.call("send_message", text="Здравей")
         self.assertFalse(err, res)
         err, res = self.call("wait_for_reply")
-        self.assertEqual(res["new_messages"], ["Hi! I can help with cards and payments."])
+        self.assertEqual(
+            res["new_messages"], ["Hi! I can help with cards and payments."]
+        )
         err, res = self.call("tap", element=999)
         self.assertTrue(err)
         self.assertIn("error", res)
